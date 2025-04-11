@@ -44,6 +44,10 @@ export const WelcomeScreen: React.FC<WelcomeScreenProps> = ({ onOpenSettings }) 
                 <span className="text-white/90">Ctrl+R / Cmd+R</span>
               </li>
               <li className="flex justify-between text-sm">
+                <span className="text-white/70">Toggle Click-Through</span>
+                <span className="text-white/90">Ctrl+T / Cmd+T</span>
+              </li>
+              <li className="flex justify-between text-sm">
                 <span className="text-white/70">Quit App</span>
                 <span className="text-white/90">Ctrl+Q / Cmd+Q</span>
               </li>

@@ -5,26 +5,34 @@ import { app } from "electron"
 import { EventEmitter } from "events"
 import { OpenAI } from "openai"
 
+export type ApiProvider = "openai" | "gemini" | "anthropic";
+
 interface Config {
-  apiKey: string;
-  apiProvider: "openai" | "gemini" | "anthropic";  // Added provider selection
+  apiKeys: Record<ApiProvider, string>; // Map of provider to API key
+  apiProvider: ApiProvider;  // Currently selected provider
   extractionModel: string;
   solutionModel: string;
   debuggingModel: string;
   language: string;
   opacity: number;
+  keyboardModifier: string; // For keyboard shortcut configuration
 }
 
 export class ConfigHelper extends EventEmitter {
   private configPath: string;
   private defaultConfig: Config = {
-    apiKey: "",
+    apiKeys: {
+      openai: "",
+      gemini: "",
+      anthropic: ""
+    },
     apiProvider: "gemini", // Default to Gemini
-    extractionModel: "gemini-2.0-flash", // Default to Flash for faster responses
+    extractionModel: "gemini-2.0-flash", 
     solutionModel: "gemini-2.0-flash",
     debuggingModel: "gemini-2.0-flash",
     language: "python",
-    opacity: 1.0
+    opacity: 1.0,
+    keyboardModifier: "CommandOrControl"
   };
 
   constructor() {
@@ -58,7 +66,7 @@ export class ConfigHelper extends EventEmitter {
   /**
    * Validate and sanitize model selection to ensure only allowed models are used
    */
-  private sanitizeModelSelection(model: string, provider: "openai" | "gemini" | "anthropic"): string {
+  private sanitizeModelSelection(model: string, provider: ApiProvider): string {
     if (provider === "openai") {
       // Only allow gpt-4o and gpt-4o-mini for OpenAI
       const allowedModels = ['gpt-4o', 'gpt-4o-mini'];
@@ -92,11 +100,44 @@ export class ConfigHelper extends EventEmitter {
     try {
       if (fs.existsSync(this.configPath)) {
         const configData = fs.readFileSync(this.configPath, 'utf8');
-        const config = JSON.parse(configData);
+        let config = JSON.parse(configData);
+        
+        // Handle migration from old config format (single apiKey) to new format (apiKeys map)
+        if (config.apiKey !== undefined && (!config.apiKeys || !config.apiKeys[config.apiProvider])) {
+          // Initialize apiKeys if not present
+          if (!config.apiKeys) {
+            config.apiKeys = {
+              openai: "",
+              gemini: "",
+              anthropic: ""
+            };
+          }
+          
+          // Transfer the existing apiKey to the appropriate provider
+          if (config.apiProvider && config.apiKey) {
+            config.apiKeys[config.apiProvider] = config.apiKey;
+          }
+          
+          // Remove the old apiKey field
+          delete config.apiKey;
+          
+          // Save the migrated config
+          this.saveConfig(config);
+          console.log("Migrated config from old format (single apiKey) to new format (apiKeys map)");
+        }
         
         // Ensure apiProvider is a valid value
-        if (config.apiProvider !== "openai" && config.apiProvider !== "gemini"  && config.apiProvider !== "anthropic") {
+        if (config.apiProvider !== "openai" && config.apiProvider !== "gemini" && config.apiProvider !== "anthropic") {
           config.apiProvider = "gemini"; // Default to Gemini if invalid
+        }
+        
+        // Ensure apiKeys is properly initialized
+        if (!config.apiKeys) {
+          config.apiKeys = {
+            openai: "",
+            gemini: "",
+            anthropic: ""
+          };
         }
         
         // Sanitize model selections to ensure only allowed models are used
@@ -145,27 +186,47 @@ export class ConfigHelper extends EventEmitter {
   /**
    * Update specific configuration values
    */
-  public updateConfig(updates: Partial<Config>): Config {
+  public updateConfig(updates: Partial<Config> & { apiKey?: string }): Config {
     try {
       const currentConfig = this.loadConfig();
       let provider = updates.apiProvider || currentConfig.apiProvider;
       
-      // Auto-detect provider based on API key format if a new key is provided
-      if (updates.apiKey && !updates.apiProvider) {
-        // If API key starts with "sk-", it's likely an OpenAI key
-        if (updates.apiKey.trim().startsWith('sk-')) {
-          provider = "openai";
-          console.log("Auto-detected OpenAI API key format");
-        } else if (updates.apiKey.trim().startsWith('sk-ant-')) {
-          provider = "anthropic";
-          console.log("Auto-detected Anthropic API key format");
-        } else {
-          provider = "gemini";
-          console.log("Using Gemini API key format (default)");
+      // Handle the case where an apiKey is provided directly (for backward compatibility)
+      if (updates.apiKey !== undefined) {
+        // Initialize apiKeys if not set
+        const apiKeys = currentConfig.apiKeys || {
+          openai: "",
+          gemini: "",
+          anthropic: ""
+        };
+        
+        // Auto-detect provider based on API key format if no provider specified
+        if (!updates.apiProvider) {
+          if (updates.apiKey.trim().startsWith('sk-')) {
+            if (updates.apiKey.trim().startsWith('sk-ant-')) {
+              provider = "anthropic";
+              console.log("Auto-detected Anthropic API key format");
+            } else {
+              provider = "openai";
+              console.log("Auto-detected OpenAI API key format");
+            }
+          } else {
+            provider = "gemini";
+            console.log("Using Gemini API key format (default)");
+          }
+          
+          // Update the provider in the updates
+          updates.apiProvider = provider;
         }
         
-        // Update the provider in the updates object
-        updates.apiProvider = provider;
+        // Set the API key for the specific provider
+        apiKeys[provider] = updates.apiKey;
+        
+        // Update the apiKeys in the updates
+        updates.apiKeys = apiKeys;
+        
+        // Remove the old apiKey field
+        delete updates.apiKey;
       }
       
       // If provider is changing, reset models to the default for that provider
@@ -201,7 +262,7 @@ export class ConfigHelper extends EventEmitter {
       
       // Only emit update event for changes other than opacity
       // This prevents re-initializing the AI client when only opacity changes
-      if (updates.apiKey !== undefined || updates.apiProvider !== undefined || 
+      if (updates.apiKeys !== undefined || updates.apiProvider !== undefined || 
           updates.extractionModel !== undefined || updates.solutionModel !== undefined || 
           updates.debuggingModel !== undefined || updates.language !== undefined) {
         this.emit('config-updated', newConfig);
@@ -215,17 +276,33 @@ export class ConfigHelper extends EventEmitter {
   }
 
   /**
-   * Check if the API key is configured
+   * Get the current API key for the selected provider
+   */
+  public getCurrentApiKey(): string {
+    const config = this.loadConfig();
+    return config.apiKeys[config.apiProvider] || "";
+  }
+
+  /**
+   * Get API key for a specific provider
+   */
+  public getApiKeyForProvider(provider: ApiProvider): string {
+    const config = this.loadConfig();
+    return config.apiKeys[provider] || "";
+  }
+
+  /**
+   * Check if the current API provider has an API key configured
    */
   public hasApiKey(): boolean {
     const config = this.loadConfig();
-    return !!config.apiKey && config.apiKey.trim().length > 0;
+    return !!config.apiKeys[config.apiProvider] && config.apiKeys[config.apiProvider].trim().length > 0;
   }
   
   /**
    * Validate the API key format
    */
-  public isValidApiKeyFormat(apiKey: string, provider?: "openai" | "gemini" | "anthropic" ): boolean {
+  public isValidApiKeyFormat(apiKey: string, provider?: ApiProvider): boolean {
     // If provider is not specified, attempt to auto-detect
     if (!provider) {
       if (apiKey.trim().startsWith('sk-')) {
@@ -288,7 +365,7 @@ export class ConfigHelper extends EventEmitter {
   /**
    * Test API key with the selected provider
    */
-  public async testApiKey(apiKey: string, provider?: "openai" | "gemini" | "anthropic"): Promise<{valid: boolean, error?: string}> {
+  public async testApiKey(apiKey: string, provider?: ApiProvider): Promise<{valid: boolean, error?: string}> {
     // Auto-detect provider based on key format if not specified
     if (!provider) {
       if (apiKey.trim().startsWith('sk-')) {
@@ -325,20 +402,22 @@ export class ConfigHelper extends EventEmitter {
       // Make a simple API call to test the key
       await openai.models.list();
       return { valid: true };
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error('OpenAI API key test failed:', error);
       
       // Determine the specific error type for better error messages
       let errorMessage = 'Unknown error validating OpenAI API key';
       
-      if (error.status === 401) {
+      const err = error as { status?: number; message?: string };
+      
+      if (err.status === 401) {
         errorMessage = 'Invalid API key. Please check your OpenAI key and try again.';
-      } else if (error.status === 429) {
+      } else if (err.status === 429) {
         errorMessage = 'Rate limit exceeded. Your OpenAI API key has reached its request limit or has insufficient quota.';
-      } else if (error.status === 500) {
+      } else if (err.status === 500) {
         errorMessage = 'OpenAI server error. Please try again later.';
-      } else if (error.message) {
-        errorMessage = `Error: ${error.message}`;
+      } else if (err.message) {
+        errorMessage = `Error: ${err.message}`;
       }
       
       return { valid: false, error: errorMessage };
@@ -358,12 +437,14 @@ export class ConfigHelper extends EventEmitter {
         return { valid: true };
       }
       return { valid: false, error: 'Invalid Gemini API key format.' };
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error('Gemini API key test failed:', error);
       let errorMessage = 'Unknown error validating Gemini API key';
       
-      if (error.message) {
-        errorMessage = `Error: ${error.message}`;
+      const err = error as { message?: string };
+      
+      if (err.message) {
+        errorMessage = `Error: ${err.message}`;
       }
       
       return { valid: false, error: errorMessage };
@@ -383,16 +464,34 @@ export class ConfigHelper extends EventEmitter {
         return { valid: true };
       }
       return { valid: false, error: 'Invalid Anthropic API key format.' };
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error('Anthropic API key test failed:', error);
       let errorMessage = 'Unknown error validating Anthropic API key';
       
-      if (error.message) {
-        errorMessage = `Error: ${error.message}`;
+      const err = error as { message?: string };
+      
+      if (err.message) {
+        errorMessage = `Error: ${err.message}`;
       }
       
       return { valid: false, error: errorMessage };
     }
+  }
+
+  /**
+   * Get the configured keyboard modifier
+   */
+  public getKeyboardModifier(): string {
+    const config = this.loadConfig();
+    return config.keyboardModifier || this.defaultConfig.keyboardModifier;
+  }
+
+  /**
+   * Set the keyboard modifier for shortcuts
+   */
+  public setKeyboardModifier(modifier: string): void {
+    this.updateConfig({ keyboardModifier: modifier });
+    this.emit('keyboard-modifier-updated', modifier);
   }
 }
 

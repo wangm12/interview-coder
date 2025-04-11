@@ -73,11 +73,15 @@ export class ProcessingHelper {
   private initializeAIClient(): void {
     try {
       const config = configHelper.loadConfig();
+      const apiKey = config.apiKeys[config.apiProvider]
+      console.log("config.apiProvider", config.apiProvider)
+      console.log("config.apiKeys", config.apiKeys)
+      console.log("apiKey", apiKey)
       
       if (config.apiProvider === "openai") {
-        if (config.apiKey) {
+        if (apiKey) {
           this.openaiClient = new OpenAI({ 
-            apiKey: config.apiKey,
+            apiKey: apiKey,
             timeout: 60000, // 60 second timeout
             maxRetries: 2   // Retry up to 2 times
           });
@@ -94,8 +98,8 @@ export class ProcessingHelper {
         // Gemini client initialization
         this.openaiClient = null;
         this.anthropicClient = null;
-        if (config.apiKey) {
-          this.geminiApiKey = config.apiKey;
+        if (apiKey) {
+          this.geminiApiKey = apiKey;
           console.log("Gemini API key set successfully");
         } else {
           this.openaiClient = null;
@@ -107,9 +111,9 @@ export class ProcessingHelper {
         // Reset other clients
         this.openaiClient = null;
         this.geminiApiKey = null;
-        if (config.apiKey) {
+        if (apiKey) {
           this.anthropicClient = new Anthropic({
-            apiKey: config.apiKey,
+            apiKey: apiKey,
             timeout: 60000,
             maxRetries: 2
           });
@@ -754,8 +758,10 @@ LANGUAGE: ${language}
 I need the response in the following format:
 1. Code: A clean, optimized implementation in ${language}
 2. Your Thoughts: A list of key insights and reasoning behind your approach
-3. Time complexity: O(X) with a detailed explanation (at least 2 sentences)
-4. Space complexity: O(X) with a detailed explanation (at least 2 sentences)
+3. Pseudo Code: A pseudo code implementation of the solution, without any code blocks or language specification;
+4. If there is a provided example input, provide a step by step explanation of what the expected output should be and how the pseudo code should handle it.
+5. Time complexity: O(X) with a detailed explanation (at least 2 sentences)
+6. Space complexity: O(X) with a detailed explanation (at least 2 sentences)
 
 For complexity explanations, please be thorough. For example: "Time complexity: O(n) because we iterate through the array only once. This is optimal as we need to examine each element at least once to find the solution." or "Space complexity: O(n) because in the worst case, we store all elements in the hashmap. The additional space scales linearly with the input size."
 
@@ -785,6 +791,7 @@ Your solution should be efficient, well-commented, and handle edge cases.
         });
 
         responseContent = solutionResponse.choices[0].message.content;
+        console.log("responseContent", responseContent)
       } else if (config.apiProvider === "gemini")  {
         // Gemini processing
         if (!this.geminiApiKey) {

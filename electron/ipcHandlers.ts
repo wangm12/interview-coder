@@ -1,7 +1,6 @@
 // ipcHandlers.ts
 
-import { ipcMain, shell, dialog } from "electron"
-import { randomBytes } from "crypto"
+import { ipcMain, shell } from "electron"
 import { IIpcHandlerDeps } from "./main"
 import { configHelper } from "./ConfigHelper"
 
@@ -14,7 +13,46 @@ export function initializeIpcHandlers(deps: IIpcHandlerDeps): void {
   })
 
   ipcMain.handle("update-config", (_event, updates) => {
-    return configHelper.updateConfig(updates);
+    // Log updates for debugging
+    console.log("Updating config with:", {
+      ...updates,
+      apiKey: updates.apiKey ? "[REDACTED]" : undefined,
+      apiKeys: updates.apiKeys ? {
+        openai: updates.apiKeys.openai ? "[REDACTED]" : "",
+        gemini: updates.apiKeys.gemini ? "[REDACTED]" : "",
+        anthropic: updates.apiKeys.anthropic ? "[REDACTED]" : ""
+      } : undefined
+    });
+    
+    const currentConfig = configHelper.loadConfig();
+    
+    // Check if keyboard modifier has changed and handle it specially
+    if (updates.keyboardModifier && updates.keyboardModifier !== currentConfig.keyboardModifier) {
+      console.log(`Keyboard modifier changing from ${currentConfig.keyboardModifier} to ${updates.keyboardModifier}`);
+      
+      // We need to call setKeyboardModifier specifically to trigger the event
+      configHelper.setKeyboardModifier(updates.keyboardModifier);
+    }
+    
+    // Make sure we have the typed updates for the config helper
+    const configUpdates = {
+      apiKeys: updates.apiKeys,       // Add the apiKeys property
+      apiKey: updates.apiKey,         // Keep for backward compatibility
+      apiProvider: updates.apiProvider,
+      extractionModel: updates.extractionModel,
+      solutionModel: updates.solutionModel,
+      debuggingModel: updates.debuggingModel,
+      language: updates.language,
+      opacity: updates.opacity,
+      // Don't include keyboardModifier here since we handled it separately
+    };
+    
+    // Debug logging
+    console.log("config.apiProvider", configHelper.loadConfig().apiProvider);
+    console.log("config.apiKeys", configHelper.loadConfig().apiKeys);
+    console.log("apiKey", configHelper.getCurrentApiKey());
+    
+    return configHelper.updateConfig(configUpdates);
   })
 
   ipcMain.handle("check-api-key", () => {
@@ -218,6 +256,28 @@ export function initializeIpcHandlers(deps: IIpcHandlerDeps): void {
     } catch (error) {
       console.error("Error toggling window:", error)
       return { error: "Failed to toggle window" }
+    }
+  })
+
+  // Click-through handler
+  ipcMain.handle("toggle-click-through", () => {
+    try {
+      deps.toggleClickThrough()
+      return { success: true }
+    } catch (error) {
+      console.error("Error toggling click-through:", error)
+      return { error: "Failed to toggle click-through" }
+    }
+  })
+
+  // Get click-through state
+  ipcMain.handle("get-click-through-state", () => {
+    try {
+      const isClickThrough = deps.getClickThroughState();
+      return { success: true, isClickThrough }
+    } catch (error) {
+      console.error("Error getting click-through state:", error)
+      return { success: false, error: "Failed to get click-through state" }
     }
   })
 

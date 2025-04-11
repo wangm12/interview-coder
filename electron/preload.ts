@@ -156,6 +156,8 @@ const electronAPI = {
   triggerMoveRight: () => ipcRenderer.invoke("trigger-move-right"),
   triggerMoveUp: () => ipcRenderer.invoke("trigger-move-up"),
   triggerMoveDown: () => ipcRenderer.invoke("trigger-move-down"),
+  toggleClickThrough: () => ipcRenderer.invoke("toggle-click-through"),
+  getClickThroughState: () => ipcRenderer.invoke("get-click-through-state"),
   onSubscriptionUpdated: (callback: () => void) => {
     const subscription = () => callback()
     ipcRenderer.on("subscription-updated", subscription)
@@ -205,8 +207,18 @@ const electronAPI = {
   
   // New methods for OpenAI API integration
   getConfig: () => ipcRenderer.invoke("get-config"),
-  updateConfig: (config: { apiKey?: string; model?: string; language?: string; opacity?: number }) => 
-    ipcRenderer.invoke("update-config", config),
+  updateConfig: (config: {
+    apiKeys?: Record<string, string>
+    apiKey?: string  // For backward compatibility
+    apiProvider: string
+    extractionModel: string
+    solutionModel: string
+    debuggingModel: string
+    keyboardModifier?: string
+    language?: string
+  }) => ipcRenderer.invoke("update-config", config),
+  testAPIKey: (apiKey: string, provider: string) =>
+    ipcRenderer.invoke("test-api-key", apiKey, provider),
   onShowSettings: (callback: () => void) => {
     const subscription = () => callback()
     ipcRenderer.on("show-settings-dialog", subscription)
@@ -236,7 +248,19 @@ const electronAPI = {
       ipcRenderer.removeListener("delete-last-screenshot", subscription)
     }
   },
-  deleteLastScreenshot: () => ipcRenderer.invoke("delete-last-screenshot")
+  deleteLastScreenshot: () => ipcRenderer.invoke("delete-last-screenshot"),
+  onProcessingUpdate: (callback: (status: any) => void) => {
+    ipcRenderer.on("processing-update", (_, status) => callback(status))
+    return () => {
+      ipcRenderer.removeAllListeners("processing-update")
+    }
+  },
+  onClickThroughToggled: (callback: (data: { enabled: boolean }) => void) => {
+    ipcRenderer.on("click-through-toggled", (_, data) => callback(data))
+    return () => {
+      ipcRenderer.removeAllListeners("click-through-toggled")
+    }
+  }
 }
 
 // Before exposing the API

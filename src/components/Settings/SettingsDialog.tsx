@@ -1,7 +1,6 @@
-import { useState, useEffect } from "react";
+import React, { useState, useEffect } from "react";
 import {
   Dialog,
-  DialogTrigger,
   DialogContent,
   DialogDescription,
   DialogHeader,
@@ -10,8 +9,59 @@ import {
 } from "../ui/dialog";
 import { Input } from "../ui/input";
 import { Button } from "../ui/button";
-import { Settings } from "lucide-react";
 import { useToast } from "../../contexts/toast";
+import { ApiProvider } from "../../../electron/ConfigHelper";
+
+// Simple dropdown implementation for keyboard modifier selection
+interface DropdownOption {
+  value: string;
+  label: string;
+}
+
+// Simplified dropdown component
+const Dropdown = ({ 
+  value, 
+  options, 
+  onChange 
+}: { 
+  value: string;
+  options: DropdownOption[];
+  onChange: (value: string) => void;
+}) => {
+  const [isOpen, setIsOpen] = useState(false);
+  const selectedOption = options.find(option => option.value === value);
+
+  return (
+    <div className="relative">
+      <div 
+        className="flex items-center justify-between p-2 rounded-md bg-black/50 border-white/10 text-white cursor-pointer text-xs"
+        onClick={() => setIsOpen(!isOpen)}
+      >
+        <span>{selectedOption?.label || "Select an option"}</span>
+        <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <path d="m6 9 6 6 6-6"/>
+        </svg>
+      </div>
+      
+      {isOpen && (
+        <div className="absolute top-full left-0 w-full mt-1 p-1 rounded-md z-50 bg-black border border-white/10 text-white">
+          {options.map(option => (
+            <div 
+              key={option.value}
+              className="py-1 px-2 rounded hover:bg-white/10 cursor-pointer text-xs"
+              onClick={() => {
+                onChange(option.value);
+                setIsOpen(false);
+              }}
+            >
+              {option.label}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+};
 
 type APIProvider = "openai" | "gemini" | "anthropic";
 
@@ -46,6 +96,16 @@ const modelCategories: ModelCategory[] = [
         id: "gpt-4o-mini",
         name: "gpt-4o-mini",
         description: "Faster, more cost-effective option"
+      },
+      {
+        id: "gpt-4.5-preview-2025-02-27",
+        name: "gpt-4.5-preview",
+        description: "Best overall performance for problem extraction"
+      },
+      {
+        id: "o3-mini-2025-01-31",
+        name: "o3-mini",
+        description: "Best overall performance for problem extraction"
       }
     ],
     geminiModels: [
@@ -92,6 +152,16 @@ const modelCategories: ModelCategory[] = [
         id: "gpt-4o-mini",
         name: "gpt-4o-mini",
         description: "Faster, more cost-effective option"
+      },
+      {
+        id: "gpt-4.5-preview-2025-02-27",
+        name: "gpt-4.5-preview",
+        description: "Best overall performance for problem extraction"
+      },
+      {
+        id: "o3-mini-2025-01-31",
+        name: "o3-mini",
+        description: "Best overall performance for problem extraction"
       }
     ],
     geminiModels: [
@@ -138,6 +208,16 @@ const modelCategories: ModelCategory[] = [
         id: "gpt-4o-mini",
         name: "gpt-4o-mini",
         description: "Faster, more cost-effective option"
+      },
+      {
+        id: "gpt-4.5-preview-2025-02-27",
+        name: "gpt-4.5-preview",
+        description: "Best overall performance for problem extraction"
+      },
+      {
+        id: "o3-mini-2025-01-31",
+        name: "o3-mini",
+        description: "Best overall performance for problem extraction"
       }
     ],
     geminiModels: [
@@ -179,13 +259,61 @@ interface SettingsDialogProps {
 
 export function SettingsDialog({ open: externalOpen, onOpenChange }: SettingsDialogProps) {
   const [open, setOpen] = useState(externalOpen || false);
-  const [apiKey, setApiKey] = useState("");
-  const [apiProvider, setApiProvider] = useState<APIProvider>("openai");
-  const [extractionModel, setExtractionModel] = useState("gpt-4o");
-  const [solutionModel, setSolutionModel] = useState("gpt-4o");
-  const [debuggingModel, setDebuggingModel] = useState("gpt-4o");
+  // Store API keys for each provider separately but initialize empty
+  const [openaiKey, setOpenaiKey] = useState("");
+  const [geminiKey, setGeminiKey] = useState("");
+  const [anthropicKey, setAnthropicKey] = useState("");
+  // Match default provider from ConfigHelper ("gemini" not "openai")
+  const [apiProvider, setApiProvider] = useState<APIProvider>("gemini");
+  // Match default models from ConfigHelper
+  const [extractionModel, setExtractionModel] = useState("gemini-2.0-flash");
+  const [solutionModel, setSolutionModel] = useState("gemini-2.0-flash");
+  const [debuggingModel, setDebuggingModel] = useState("gemini-2.0-flash");
+  const [keyboardModifier, setKeyboardModifier] = useState("CommandOrControl");
   const [isLoading, setIsLoading] = useState(false);
   const { showToast } = useToast();
+
+  // Helper to get the current API key based on selected provider
+  const getCurrentApiKey = () => {
+    switch(apiProvider) {
+      case "openai": return openaiKey;
+      case "gemini": return geminiKey;
+      case "anthropic": return anthropicKey;
+      default: return "";
+    }
+  };
+
+  // Helper to set the current API key based on selected provider
+  const setCurrentApiKey = (key: string) => {
+    switch(apiProvider) {
+      case "openai": setOpenaiKey(key); break;
+      case "gemini": setGeminiKey(key); break;
+      case "anthropic": setAnthropicKey(key); break;
+    }
+  };
+
+  // Define modifier options
+  const keyboardModifierOptions = [
+    { value: "CommandOrControl", label: "Ctrl / Cmd" },
+    { value: "Control", label: "Ctrl" },
+    { value: "Alt", label: "Alt" },
+    { value: "Option", label: "Option (macOS)" },
+    { value: "CommandOrControl+Shift", label: "Ctrl+Shift / Cmd+Shift" },
+    { value: "CommandOrControl+Alt", label: "Ctrl+Alt / Cmd+Alt" }
+  ];
+
+  // Format modifier for display
+  const formatModifierForDisplay = (modifier: string): string => {
+    switch (modifier) {
+      case "CommandOrControl": return "Ctrl / Cmd";
+      case "Control": return "Ctrl";
+      case "Alt": return "Alt";
+      case "Option": return "Option";
+      case "CommandOrControl+Shift": return "Ctrl+Shift / Cmd+Shift";
+      case "CommandOrControl+Alt": return "Ctrl+Alt / Cmd+Alt";
+      default: return modifier;
+    }
+  };
 
   // Sync with external open state
   useEffect(() => {
@@ -208,21 +336,31 @@ export function SettingsDialog({ open: externalOpen, onOpenChange }: SettingsDia
     if (open) {
       setIsLoading(true);
       interface Config {
-        apiKey?: string;
+        apiKeys?: Record<APIProvider, string>;
         apiProvider?: APIProvider;
         extractionModel?: string;
         solutionModel?: string;
         debuggingModel?: string;
+        keyboardModifier?: string;
       }
 
       window.electronAPI
         .getConfig()
         .then((config: Config) => {
-          setApiKey(config.apiKey || "");
-          setApiProvider(config.apiProvider || "openai");
-          setExtractionModel(config.extractionModel || "gpt-4o");
-          setSolutionModel(config.solutionModel || "gpt-4o");
-          setDebuggingModel(config.debuggingModel || "gpt-4o");
+          console.log("config", config)
+          // Handle API keys
+          if (config.apiKeys) {
+            // New format with separate keys for each provider
+            setOpenaiKey(config.apiKeys.openai || "");
+            setGeminiKey(config.apiKeys.gemini || "");
+            setAnthropicKey(config.apiKeys.anthropic || "");
+          }
+          
+          setApiProvider(config.apiProvider || "gemini");
+          setExtractionModel(config.extractionModel || "gemini-2.0-flash");
+          setSolutionModel(config.solutionModel || "gemini-2.0-flash");
+          setDebuggingModel(config.debuggingModel || "gemini-2.0-flash");
+          setKeyboardModifier(config.keyboardModifier || "CommandOrControl");
         })
         .catch((error: unknown) => {
           console.error("Failed to load config:", error);
@@ -238,15 +376,15 @@ export function SettingsDialog({ open: externalOpen, onOpenChange }: SettingsDia
   const handleProviderChange = (provider: APIProvider) => {
     setApiProvider(provider);
     
-    // Reset models to defaults when changing provider
+    // Reset models to defaults for the selected provider, matching ConfigHelper logic
     if (provider === "openai") {
       setExtractionModel("gpt-4o");
       setSolutionModel("gpt-4o");
       setDebuggingModel("gpt-4o");
     } else if (provider === "gemini") {
-      setExtractionModel("gemini-1.5-pro");
-      setSolutionModel("gemini-1.5-pro");
-      setDebuggingModel("gemini-1.5-pro");
+      setExtractionModel("gemini-2.0-flash");
+      setSolutionModel("gemini-2.0-flash");
+      setDebuggingModel("gemini-2.0-flash");
     } else if (provider === "anthropic") {
       setExtractionModel("claude-3-7-sonnet-20250219");
       setSolutionModel("claude-3-7-sonnet-20250219");
@@ -257,22 +395,42 @@ export function SettingsDialog({ open: externalOpen, onOpenChange }: SettingsDia
   const handleSave = async () => {
     setIsLoading(true);
     try {
+      // Create an apiKeys object with all provider keys
+      const apiKeys: Record<ApiProvider, string> = {
+        openai: openaiKey,
+        gemini: geminiKey,
+        anthropic: anthropicKey
+      };
+      
+      // Get current config to check if any API keys changed
+      const currentConfig = await window.electronAPI.getConfig();
+      
+      // Check if any API key has changed
+      const hasApiKeyChanged = 
+        (currentConfig.apiKeys?.openai || "") !== openaiKey ||
+        (currentConfig.apiKeys?.gemini || "") !== geminiKey ||
+        (currentConfig.apiKeys?.anthropic || "") !== anthropicKey;
+      
       const result = await window.electronAPI.updateConfig({
-        apiKey,
+        apiKeys,
         apiProvider,
         extractionModel,
         solutionModel,
         debuggingModel,
+        keyboardModifier,
       });
       
       if (result) {
         showToast("Success", "Settings saved successfully", "success");
         handleOpenChange(false);
         
-        // Force reload the app to apply the API key
-        setTimeout(() => {
-          window.location.reload();
-        }, 1500);
+        // Only force reload if any API key has changed
+        if (hasApiKeyChanged) {
+          showToast("Reloading", "Reloading application to apply API key changes", "success");
+          setTimeout(() => {
+            window.location.reload();
+          }, 1500);
+        }
       }
     } catch (error) {
       console.error("Failed to save settings:", error);
@@ -318,7 +476,7 @@ export function SettingsDialog({ open: externalOpen, onOpenChange }: SettingsDia
         <DialogHeader>
           <DialogTitle>API Settings</DialogTitle>
           <DialogDescription className="text-white/70">
-            Configure your API key and model preferences. You'll need your own API key to use this application.
+            Configure your API keys and model preferences. You'll need your own API key(s) to use this application.
           </DialogDescription>
         </DialogHeader>
         <div className="space-y-4 py-4">
@@ -342,7 +500,6 @@ export function SettingsDialog({ open: externalOpen, onOpenChange }: SettingsDia
                   />
                   <div className="flex flex-col">
                     <p className="font-medium text-white text-sm">OpenAI</p>
-                    <p className="text-xs text-white/60">GPT-4o models</p>
                   </div>
                 </div>
               </div>
@@ -362,7 +519,6 @@ export function SettingsDialog({ open: externalOpen, onOpenChange }: SettingsDia
                   />
                   <div className="flex flex-col">
                     <p className="font-medium text-white text-sm">Gemini</p>
-                    <p className="text-xs text-white/60">Gemini 1.5 models</p>
                   </div>
                 </div>
               </div>
@@ -382,7 +538,6 @@ export function SettingsDialog({ open: externalOpen, onOpenChange }: SettingsDia
                   />
                   <div className="flex flex-col">
                     <p className="font-medium text-white text-sm">Claude</p>
-                    <p className="text-xs text-white/60">Claude 3 models</p>
                   </div>
                 </div>
               </div>
@@ -398,22 +553,22 @@ export function SettingsDialog({ open: externalOpen, onOpenChange }: SettingsDia
             <Input
               id="apiKey"
               type="password"
-              value={apiKey}
-              onChange={(e) => setApiKey(e.target.value)}
+              value={getCurrentApiKey()}
+              onChange={(e) => setCurrentApiKey(e.target.value)}
               placeholder={
                 apiProvider === "openai" ? "sk-..." : 
                 apiProvider === "gemini" ? "Enter your Gemini API key" :
-                "sk-ant-..."
+                "sk-ant-..." // Claude API key
               }
               className="bg-black/50 border-white/10 text-white"
             />
-            {apiKey && (
+            {getCurrentApiKey() && (
               <p className="text-xs text-white/50">
-                Current: {maskApiKey(apiKey)}
+                Current: {maskApiKey(getCurrentApiKey())}
               </p>
             )}
             <p className="text-xs text-white/50">
-              Your API key is stored locally and never sent to any server except {apiProvider === "openai" ? "OpenAI" : "Google"}
+              Your API keys are stored locally and never sent to any server except the respective API providers
             </p>
             <div className="mt-2 p-2 rounded-md bg-white/5 border border-white/10">
               <p className="text-xs text-white/80 mb-1">Don't have an API key?</p>
@@ -459,43 +614,50 @@ export function SettingsDialog({ open: externalOpen, onOpenChange }: SettingsDia
           
           <div className="space-y-2 mt-4">
             <label className="text-sm font-medium text-white mb-2 block">Keyboard Shortcuts</label>
+            
+            <div className="space-y-2 mb-2">
+              <label className="text-sm font-medium text-white">Keyboard Modifier</label>
+              <Dropdown value={keyboardModifier} options={keyboardModifierOptions} onChange={setKeyboardModifier} />
+              <p className="text-xs text-white/60">Choose the modifier key for all shortcuts</p>
+            </div>
+
             <div className="bg-black/30 border border-white/10 rounded-lg p-3">
               <div className="grid grid-cols-2 gap-y-2 text-xs">
                 <div className="text-white/70">Toggle Visibility</div>
-                <div className="text-white/90 font-mono">Ctrl+B / Cmd+B</div>
+                <div className="text-white/90 font-mono">{formatModifierForDisplay(keyboardModifier)}+B</div>
                 
                 <div className="text-white/70">Take Screenshot</div>
-                <div className="text-white/90 font-mono">Ctrl+H / Cmd+H</div>
+                <div className="text-white/90 font-mono">{formatModifierForDisplay(keyboardModifier)}+H</div>
                 
                 <div className="text-white/70">Process Screenshots</div>
-                <div className="text-white/90 font-mono">Ctrl+Enter / Cmd+Enter</div>
+                <div className="text-white/90 font-mono">{formatModifierForDisplay(keyboardModifier)}+Enter</div>
                 
                 <div className="text-white/70">Delete Last Screenshot</div>
-                <div className="text-white/90 font-mono">Ctrl+L / Cmd+L</div>
+                <div className="text-white/90 font-mono">{formatModifierForDisplay(keyboardModifier)}+L</div>
                 
                 <div className="text-white/70">Reset View</div>
-                <div className="text-white/90 font-mono">Ctrl+R / Cmd+R</div>
+                <div className="text-white/90 font-mono">{formatModifierForDisplay(keyboardModifier)}+R</div>
                 
                 <div className="text-white/70">Quit Application</div>
-                <div className="text-white/90 font-mono">Ctrl+Q / Cmd+Q</div>
+                <div className="text-white/90 font-mono">{formatModifierForDisplay(keyboardModifier)}+Q</div>
                 
                 <div className="text-white/70">Move Window</div>
-                <div className="text-white/90 font-mono">Ctrl+Arrow Keys</div>
+                <div className="text-white/90 font-mono">{formatModifierForDisplay(keyboardModifier)}+Arrow Keys</div>
                 
                 <div className="text-white/70">Decrease Opacity</div>
-                <div className="text-white/90 font-mono">Ctrl+[ / Cmd+[</div>
+                <div className="text-white/90 font-mono">{formatModifierForDisplay(keyboardModifier)}+[</div>
                 
                 <div className="text-white/70">Increase Opacity</div>
-                <div className="text-white/90 font-mono">Ctrl+] / Cmd+]</div>
+                <div className="text-white/90 font-mono">{formatModifierForDisplay(keyboardModifier)}+]</div>
                 
                 <div className="text-white/70">Zoom Out</div>
-                <div className="text-white/90 font-mono">Ctrl+- / Cmd+-</div>
+                <div className="text-white/90 font-mono">{formatModifierForDisplay(keyboardModifier)}+-</div>
                 
                 <div className="text-white/70">Reset Zoom</div>
-                <div className="text-white/90 font-mono">Ctrl+0 / Cmd+0</div>
+                <div className="text-white/90 font-mono">{formatModifierForDisplay(keyboardModifier)}+0</div>
                 
                 <div className="text-white/70">Zoom In</div>
-                <div className="text-white/90 font-mono">Ctrl+= / Cmd+=</div>
+                <div className="text-white/90 font-mono">{formatModifierForDisplay(keyboardModifier)}+=</div>
               </div>
             </div>
           </div>
@@ -575,7 +737,7 @@ export function SettingsDialog({ open: externalOpen, onOpenChange }: SettingsDia
           <Button
             className="px-4 py-3 bg-white text-black rounded-xl font-medium hover:bg-white/90 transition-colors"
             onClick={handleSave}
-            disabled={isLoading || !apiKey}
+            disabled={isLoading || !getCurrentApiKey()}
           >
             {isLoading ? "Saving..." : "Save Settings"}
           </Button>

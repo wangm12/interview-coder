@@ -1,4 +1,4 @@
-import { app, BrowserWindow, screen, shell, ipcMain } from "electron"
+import { app, BrowserWindow, screen, shell } from "electron"
 import path from "path"
 import fs from "fs"
 import { initializeIpcHandlers } from "./ipcHandlers"
@@ -17,6 +17,7 @@ const state = {
   // Window management properties
   mainWindow: null as BrowserWindow | null,
   isWindowVisible: false,
+  isClickThrough: true,
   windowPosition: null as { x: number; y: number } | null,
   windowSize: null as { width: number; height: number } | null,
   screenWidth: 0,
@@ -81,6 +82,7 @@ export interface IShortcutsHelperDeps {
   setView: (view: "queue" | "solutions" | "debug") => void
   isVisible: () => boolean
   toggleMainWindow: () => void
+  toggleClickThrough: () => void
   moveWindowLeft: () => void
   moveWindowRight: () => void
   moveWindowUp: () => void
@@ -101,6 +103,8 @@ export interface IIpcHandlerDeps {
   takeScreenshot: () => Promise<string>
   getView: () => "queue" | "solutions" | "debug"
   toggleMainWindow: () => void
+  toggleClickThrough: () => void
+  getClickThroughState: () => boolean
   clearQueues: () => void
   setView: (view: "queue" | "solutions" | "debug") => void
   moveWindowLeft: () => void
@@ -138,6 +142,7 @@ function initializeHelpers() {
     setView,
     isVisible: () => state.isWindowVisible,
     toggleMainWindow,
+    toggleClickThrough,
     moveWindowLeft: () =>
       moveWindowHorizontal((x) =>
         Math.max(-(state.windowSize?.width || 0) / 2, x - state.step)
@@ -364,6 +369,10 @@ async function createWindow(): Promise<void> {
     state.mainWindow.setOpacity(savedOpacity);
     state.isWindowVisible = true;
   }
+
+  // Enable click-through behavior by default
+  state.mainWindow.setIgnoreMouseEvents(true, { forward: true })
+  state.isClickThrough = true
 }
 
 function handleWindowMove(): void {
@@ -408,7 +417,9 @@ function showMainWindow(): void {
         ...state.windowSize
       });
     }
-    state.mainWindow.setIgnoreMouseEvents(false);
+    // Only disable click-through if it's not supposed to be in click-through mode
+    // This preserves the user's click-through preference
+    state.mainWindow.setIgnoreMouseEvents(state.isClickThrough, { forward: true });
     state.mainWindow.setAlwaysOnTop(true, "screen-saver", 1);
     state.mainWindow.setVisibleOnAllWorkspaces(true, {
       visibleOnFullScreen: true
@@ -418,7 +429,7 @@ function showMainWindow(): void {
     state.mainWindow.showInactive(); // Use showInactive instead of show+focus
     state.mainWindow.setOpacity(1); // Then set opacity to 1 after showing
     state.isWindowVisible = true;
-    console.log('Window shown with showInactive(), opacity set to 1');
+    console.log(`Window shown with showInactive(), opacity set to 1, click-through: ${state.isClickThrough}`);
   }
 }
 
@@ -543,6 +554,8 @@ async function initializeApp() {
       takeScreenshot,
       getView,
       toggleMainWindow,
+      toggleClickThrough,
+      getClickThroughState: () => state.isClickThrough,
       clearQueues,
       setView,
       moveWindowLeft: () =>
@@ -685,6 +698,20 @@ function getHasDebugged(): boolean {
   return state.hasDebugged
 }
 
+// Toggle click-through functionality
+function toggleClickThrough(): void {
+  if (!state.mainWindow?.isDestroyed()) {
+    state.isClickThrough = !state.isClickThrough;
+    state.mainWindow.setIgnoreMouseEvents(state.isClickThrough, { forward: true });
+    console.log(`Click-through ${state.isClickThrough ? 'enabled' : 'disabled'}`);
+    
+    // Send notification to renderer process
+    state.mainWindow.webContents.send("click-through-toggled", { 
+      enabled: state.isClickThrough 
+    });
+  }
+}
+
 // Export state and functions for other modules
 export {
   state,
@@ -692,6 +719,7 @@ export {
   hideMainWindow,
   showMainWindow,
   toggleMainWindow,
+  toggleClickThrough,
   setWindowDimensions,
   moveWindowHorizontal,
   moveWindowVertical,

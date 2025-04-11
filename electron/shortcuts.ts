@@ -2,11 +2,89 @@ import { globalShortcut, app } from "electron"
 import { IShortcutsHelperDeps } from "./main"
 import { configHelper } from "./ConfigHelper"
 
+// Define shortcut actions for better type safety
+type ShortcutAction = 
+  | "takeScreenshot" 
+  | "processScreenshots" 
+  | "resetQueues" 
+  | "moveWindowLeft" 
+  | "moveWindowRight" 
+  | "moveWindowDown" 
+  | "moveWindowUp" 
+  | "toggleWindow" 
+  | "quitApp" 
+  | "decreaseOpacity" 
+  | "increaseOpacity" 
+  | "zoomOut" 
+  | "resetZoom" 
+  | "zoomIn" 
+  | "deleteLastScreenshot"
+  | "toggleClickThrough";
+
+// Map action to key (the unchangeable part of the shortcut)
+const SHORTCUT_KEYS: Record<ShortcutAction, string> = {
+  takeScreenshot: "H",
+  processScreenshots: "Enter",
+  resetQueues: "R",
+  moveWindowLeft: "Left",
+  moveWindowRight: "Right",
+  moveWindowDown: "Down",
+  moveWindowUp: "Up",
+  toggleWindow: "B",
+  quitApp: "Q",
+  decreaseOpacity: "[",
+  increaseOpacity: "]",
+  zoomOut: "-",
+  resetZoom: "0",
+  zoomIn: "=",
+  deleteLastScreenshot: "L",
+  toggleClickThrough: "T"
+};
+
 export class ShortcutsHelper {
   private deps: IShortcutsHelperDeps
+  private registeredShortcuts: string[] = []
 
   constructor(deps: IShortcutsHelperDeps) {
     this.deps = deps
+    
+    // Listen for keyboard modifier updates
+    configHelper.on('keyboard-modifier-updated', (modifier) => {
+      console.log(`⌨️ Keyboard modifier updated to: ${modifier}`);
+      this.unregisterAllShortcuts();
+      this.registerGlobalShortcuts();
+    });
+  }
+
+  private unregisterAllShortcuts(): void {
+    // Log the number of shortcuts we're trying to unregister
+    console.log(`Unregistering ${this.registeredShortcuts.length} shortcuts...`);
+    
+    // Unregister all previously registered shortcuts
+    let unregisteredCount = 0;
+    this.registeredShortcuts.forEach(shortcut => {
+      try {
+        globalShortcut.unregister(shortcut);
+        unregisteredCount++;
+        console.log(`Unregistered shortcut: ${shortcut}`);
+      } catch (error) {
+        console.error(`Error unregistering shortcut ${shortcut}:`, error);
+      }
+    });
+    
+    console.log(`Unregistered ${unregisteredCount}/${this.registeredShortcuts.length} shortcuts`);
+    
+    // As a safety measure, unregister all shortcuts
+    globalShortcut.unregisterAll();
+    
+    // Clear the registered shortcuts array
+    this.registeredShortcuts = [];
+  }
+
+  private getShortcutString(action: ShortcutAction): string {
+    const modifier = configHelper.getKeyboardModifier();
+    const key = SHORTCUT_KEYS[action];
+    return `${modifier}+${key}`;
   }
 
   private adjustOpacity(delta: number): void {
@@ -34,8 +112,34 @@ export class ShortcutsHelper {
     }
   }
 
+  private registerShortcut(action: ShortcutAction, callback: () => void): void {
+    const shortcutString = this.getShortcutString(action);
+    
+    try {
+      // Check if shortcut is already registered
+      if (globalShortcut.isRegistered(shortcutString)) {
+        console.warn(`Shortcut ${shortcutString} is already registered. Unregistering first.`);
+        globalShortcut.unregister(shortcutString);
+      }
+      
+      const success = globalShortcut.register(shortcutString, callback);
+      if (success) {
+        console.log(`✅ Registered shortcut: ${shortcutString} for ${action}`);
+        this.registeredShortcuts.push(shortcutString);
+      } else {
+        console.error(`❌ Failed to register shortcut: ${shortcutString} for ${action}`);
+      }
+    } catch (error) {
+      console.error(`💥 Error registering shortcut ${shortcutString}:`, error);
+    }
+  }
+
   public registerGlobalShortcuts(): void {
-    globalShortcut.register("CommandOrControl+H", async () => {
+    const keyboardModifier = configHelper.getKeyboardModifier();
+    console.log(`🔄 Registering global shortcuts with modifier: ${keyboardModifier}`);
+    
+    // Register each shortcut with its corresponding action
+    this.registerShortcut("takeScreenshot", async () => {
       const mainWindow = this.deps.getMainWindow()
       if (mainWindow) {
         console.log("Taking screenshot...")
@@ -50,15 +154,15 @@ export class ShortcutsHelper {
           console.error("Error capturing screenshot:", error)
         }
       }
-    })
+    });
 
-    globalShortcut.register("CommandOrControl+Enter", async () => {
+    this.registerShortcut("processScreenshots", async () => {
       await this.deps.processingHelper?.processScreenshots()
-    })
+    });
 
-    globalShortcut.register("CommandOrControl+R", () => {
+    this.registerShortcut("resetQueues", () => {
       console.log(
-        "Command + R pressed. Canceling requests and resetting queues..."
+        "Canceling requests and resetting queues..."
       )
 
       // Cancel ongoing API requests
@@ -78,90 +182,94 @@ export class ShortcutsHelper {
         mainWindow.webContents.send("reset-view")
         mainWindow.webContents.send("reset")
       }
-    })
+    });
 
-    // New shortcuts for moving the window
-    globalShortcut.register("CommandOrControl+Left", () => {
-      console.log("Command/Ctrl + Left pressed. Moving window left.")
+    // Shortcuts for moving the window
+    this.registerShortcut("moveWindowLeft", () => {
+      console.log("Moving window left.")
       this.deps.moveWindowLeft()
-    })
+    });
 
-    globalShortcut.register("CommandOrControl+Right", () => {
-      console.log("Command/Ctrl + Right pressed. Moving window right.")
+    this.registerShortcut("moveWindowRight", () => {
+      console.log("Moving window right.")
       this.deps.moveWindowRight()
-    })
+    });
 
-    globalShortcut.register("CommandOrControl+Down", () => {
-      console.log("Command/Ctrl + down pressed. Moving window down.")
+    this.registerShortcut("moveWindowDown", () => {
+      console.log("Moving window down.")
       this.deps.moveWindowDown()
-    })
+    });
 
-    globalShortcut.register("CommandOrControl+Up", () => {
-      console.log("Command/Ctrl + Up pressed. Moving window Up.")
+    this.registerShortcut("moveWindowUp", () => {
+      console.log("Moving window up.")
       this.deps.moveWindowUp()
-    })
+    });
 
-    globalShortcut.register("CommandOrControl+B", () => {
-      console.log("Command/Ctrl + B pressed. Toggling window visibility.")
+    this.registerShortcut("toggleWindow", () => {
+      console.log("Toggling window visibility.")
       this.deps.toggleMainWindow()
-    })
+    });
 
-    globalShortcut.register("CommandOrControl+Q", () => {
-      console.log("Command/Ctrl + Q pressed. Quitting application.")
+    this.registerShortcut("quitApp", () => {
+      console.log("Quitting application.")
       app.quit()
-    })
+    });
 
     // Adjust opacity shortcuts
-    globalShortcut.register("CommandOrControl+[", () => {
-      console.log("Command/Ctrl + [ pressed. Decreasing opacity.")
+    this.registerShortcut("decreaseOpacity", () => {
+      console.log("Decreasing opacity.")
       this.adjustOpacity(-0.1)
-    })
+    });
 
-    globalShortcut.register("CommandOrControl+]", () => {
-      console.log("Command/Ctrl + ] pressed. Increasing opacity.")
+    this.registerShortcut("increaseOpacity", () => {
+      console.log("Increasing opacity.")
       this.adjustOpacity(0.1)
-    })
+    });
     
     // Zoom controls
-    globalShortcut.register("CommandOrControl+-", () => {
-      console.log("Command/Ctrl + - pressed. Zooming out.")
+    this.registerShortcut("zoomOut", () => {
+      console.log("Zooming out.")
       const mainWindow = this.deps.getMainWindow()
       if (mainWindow) {
         const currentZoom = mainWindow.webContents.getZoomLevel()
         mainWindow.webContents.setZoomLevel(currentZoom - 0.5)
       }
-    })
+    });
     
-    globalShortcut.register("CommandOrControl+0", () => {
-      console.log("Command/Ctrl + 0 pressed. Resetting zoom.")
+    this.registerShortcut("resetZoom", () => {
+      console.log("Resetting zoom.")
       const mainWindow = this.deps.getMainWindow()
       if (mainWindow) {
         mainWindow.webContents.setZoomLevel(0)
       }
-    })
+    });
     
-    globalShortcut.register("CommandOrControl+=", () => {
-      console.log("Command/Ctrl + = pressed. Zooming in.")
+    this.registerShortcut("zoomIn", () => {
+      console.log("Zooming in.")
       const mainWindow = this.deps.getMainWindow()
       if (mainWindow) {
         const currentZoom = mainWindow.webContents.getZoomLevel()
         mainWindow.webContents.setZoomLevel(currentZoom + 0.5)
       }
-    })
+    });
     
-    // Delete last screenshot shortcut
-    globalShortcut.register("CommandOrControl+L", () => {
-      console.log("Command/Ctrl + L pressed. Deleting last screenshot.")
+    this.registerShortcut("deleteLastScreenshot", () => {
+      console.log("Deleting last screenshot.")
       const mainWindow = this.deps.getMainWindow()
       if (mainWindow) {
-        // Send an event to the renderer to delete the last screenshot
         mainWindow.webContents.send("delete-last-screenshot")
       }
-    })
+    });
+    
+    // Toggle click-through mode
+    this.registerShortcut("toggleClickThrough", () => {
+      console.log("Toggling click-through mode.")
+      this.deps.toggleClickThrough()
+    });
     
     // Unregister shortcuts when quitting
     app.on("will-quit", () => {
-      globalShortcut.unregisterAll()
-    })
+      this.unregisterAllShortcuts();
+    });
   }
 }

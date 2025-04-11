@@ -147,6 +147,38 @@ function App() {
     };
   }, []);
 
+  // Maintain click-through state across view changes
+  useEffect(() => {
+    // Listen for solution success and ensure click-through state is preserved
+    const unsubscribeSolutionSuccess = window.electronAPI.onSolutionSuccess(async () => {
+      console.log("Solution success - ensuring click-through state is preserved");
+      // Short delay to ensure the view has changed
+      setTimeout(async () => {
+        try {
+          // Check the current click-through state
+          const response = await window.electronAPI.getClickThroughState();
+          if (response && response.success) {
+            const shouldBeClickThrough = response.isClickThrough;
+            
+            // If click-through was enabled, ensure it stays enabled in the Solutions view
+            if (shouldBeClickThrough) {
+              console.log("Ensuring click-through remains enabled in Solutions view");
+              // Toggle twice to reset the state (in case it was changed during view transition)
+              await window.electronAPI.toggleClickThrough();
+              await window.electronAPI.toggleClickThrough();
+            }
+          }
+        } catch (error) {
+          console.error("Error restoring click-through state:", error);
+        }
+      }, 300);
+    });
+    
+    return () => {
+      unsubscribeSolutionSuccess();
+    };
+  }, []);
+
   // Initialize basic app state
   useEffect(() => {
     // Load config and set values
