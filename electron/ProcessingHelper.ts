@@ -670,10 +670,7 @@ export class ProcessingHelper {
             progress: 100
           });
           
-          mainWindow.webContents.send(
-            this.deps.PROCESSING_EVENTS.SOLUTION_SUCCESS,
-            solutionsResult.data
-          );
+          // The solution success event is already sent in generateSolutionsHelper
           return { success: true, data: solutionsResult.data };
         } else {
           throw new Error(
@@ -729,17 +726,25 @@ export class ProcessingHelper {
         throw new Error("No problem info available");
       }
 
-      // Update progress status
+      // Initial setup for all API calls
+      const apiProvider = config.apiProvider;
+      let finalResponse = {
+        code: "",
+        thoughts: [] as string[],
+        time_complexity: "",
+        space_complexity: ""
+      };
+
+      // ================ STAGE 1: EDGE CASES ================
       if (mainWindow) {
         mainWindow.webContents.send("processing-status", {
-          message: "Creating optimal solution with detailed explanations...",
-          progress: 60
+          message: "Analyzing edge cases...",
+          progress: 40
         });
       }
 
-      // Create prompt for solution generation
-      const promptText = `
-Generate a detailed solution for the following coding problem:
+      const edgeCasePrompt = `
+Analyze the following coding problem and identify potential edge cases:
 
 PROBLEM STATEMENT:
 ${problemInfo.problem_statement}
@@ -755,215 +760,582 @@ ${problemInfo.example_output || "No example output provided."}
 
 LANGUAGE: ${language}
 
-I need the response in the following format:
-1. Code: A clean, optimized implementation in ${language}
-2. Your Thoughts: A list of key insights and reasoning behind your approach
-3. Pseudo Code: A pseudo code implementation of the solution, without any code blocks or language specification;
-4. If there is a provided example input, provide a step by step explanation of what the expected output should be and how the pseudo code should handle it.
-5. Time complexity: O(X) with a detailed explanation (at least 2 sentences)
-6. Space complexity: O(X) with a detailed explanation (at least 2 sentences)
-
-For complexity explanations, please be thorough. For example: "Time complexity: O(n) because we iterate through the array only once. This is optimal as we need to examine each element at least once to find the solution." or "Space complexity: O(n) because in the worst case, we store all elements in the hashmap. The additional space scales linearly with the input size."
-
-Your solution should be efficient, well-commented, and handle edge cases.
+Just list 3-5 important edge cases that a solution needs to handle.
+Format the output as a simple list of edge cases without explanations.
+Keep each edge case to a single line and make them very concise.
 `;
 
-      let responseContent;
+      let edgeCases: string[] = [];
       
-      if (config.apiProvider === "openai") {
-        // OpenAI processing
-        if (!this.openaiClient) {
-          return {
-            success: false,
-            error: "OpenAI API key not configured. Please check your settings."
-          };
-        }
-        
-        // Send to OpenAI API
-        const solutionResponse = await this.openaiClient.chat.completions.create({
+      // API Call for edge cases based on provider
+      if (apiProvider === "openai" && this.openaiClient) {
+        const edgeCaseResponse = await this.openaiClient.chat.completions.create({
           model: config.solutionModel || "gpt-4o",
           messages: [
-            { role: "system", content: "You are an expert coding interview assistant. Provide clear, optimal solutions with detailed explanations." },
-            { role: "user", content: promptText }
+            { role: "system", content: "You are an expert coding interview assistant. Identify critical edge cases for coding problems. List them concisely without explanations." },
+            { role: "user", content: edgeCasePrompt }
           ],
-          max_tokens: 4000,
+          max_tokens: 1000,
+          temperature: 0.2
+        });
+        
+        const responseText = edgeCaseResponse.choices[0].message.content;
+        edgeCases = this.extractBulletPoints(responseText);
+      } 
+      else if (apiProvider === "gemini" && this.geminiApiKey) {
+        // Gemini implementation for edge cases
+        const geminiMessages = [
+          {
+            role: "user",
+            parts: [{ text: edgeCasePrompt }]
+          }
+        ];
+
+        const response = await axios.default.post(
+          `https://generativelanguage.googleapis.com/v1beta/models/${config.solutionModel || "gemini-2.0-flash"}:generateContent?key=${this.geminiApiKey}`,
+          {
+            contents: geminiMessages,
+            generationConfig: {
+              temperature: 0.2,
+              maxOutputTokens: 1000
+            }
+          },
+          { signal }
+        );
+
+        const responseData = response.data as GeminiResponse;
+        if (responseData.candidates && responseData.candidates.length > 0) {
+          const responseText = responseData.candidates[0].content.parts[0].text;
+          edgeCases = this.extractBulletPoints(responseText);
+        }
+      }
+      else if (apiProvider === "anthropic" && this.anthropicClient) {
+        const messages = [
+          {
+            role: "user" as const,
+            content: [{ type: "text" as const, text: edgeCasePrompt }]
+          }
+        ];
+
+        const response = await this.anthropicClient.messages.create({
+          model: config.solutionModel || "claude-3-7-sonnet-20250219",
+          max_tokens: 1000,
+          messages: messages,
           temperature: 0.2
         });
 
-        responseContent = solutionResponse.choices[0].message.content;
-        console.log("responseContent", responseContent)
-      } else if (config.apiProvider === "gemini")  {
-        // Gemini processing
-        if (!this.geminiApiKey) {
-          return {
-            success: false,
-            error: "Gemini API key not configured. Please check your settings."
-          };
-        }
-        
-        try {
-          // Create Gemini message structure
-          const geminiMessages = [
-            {
-              role: "user",
-              parts: [
-                {
-                  text: `You are an expert coding interview assistant. Provide a clear, optimal solution with detailed explanations for this problem:\n\n${promptText}`
-                }
-              ]
-            }
-          ];
-
-          // Make API request to Gemini
-          const response = await axios.default.post(
-            `https://generativelanguage.googleapis.com/v1beta/models/${config.solutionModel || "gemini-2.0-flash"}:generateContent?key=${this.geminiApiKey}`,
-            {
-              contents: geminiMessages,
-              generationConfig: {
-                temperature: 0.2,
-                maxOutputTokens: 4000
-              }
-            },
-            { signal }
-          );
-
-          const responseData = response.data as GeminiResponse;
-          
-          if (!responseData.candidates || responseData.candidates.length === 0) {
-            throw new Error("Empty response from Gemini API");
-          }
-          
-          responseContent = responseData.candidates[0].content.parts[0].text;
-        } catch (error) {
-          console.error("Error using Gemini API for solution:", error);
-          return {
-            success: false,
-            error: "Failed to generate solution with Gemini API. Please check your API key or try again later."
-          };
-        }
-      } else if (config.apiProvider === "anthropic") {
-        // Anthropic processing
-        if (!this.anthropicClient) {
-          return {
-            success: false,
-            error: "Anthropic API key not configured. Please check your settings."
-          };
-        }
-        
-        try {
-          const messages = [
-            {
-              role: "user" as const,
-              content: [
-                {
-                  type: "text" as const,
-                  text: `You are an expert coding interview assistant. Provide a clear, optimal solution with detailed explanations for this problem:\n\n${promptText}`
-                }
-              ]
-            }
-          ];
-
-          // Send to Anthropic API
-          const response = await this.anthropicClient.messages.create({
-            model: config.solutionModel || "claude-3-7-sonnet-20250219",
-            max_tokens: 4000,
-            messages: messages,
-            temperature: 0.2
-          });
-
-          responseContent = (response.content[0] as { type: 'text', text: string }).text;
-        } catch (error: any) {
-          console.error("Error using Anthropic API for solution:", error);
-
-          // Add specific handling for Claude's limitations
-          if (error.status === 429) {
-            return {
-              success: false,
-              error: "Claude API rate limit exceeded. Please wait a few minutes before trying again."
-            };
-          } else if (error.status === 413 || (error.message && error.message.includes("token"))) {
-            return {
-              success: false,
-              error: "Your screenshots contain too much information for Claude to process. Switch to OpenAI or Gemini in settings which can handle larger inputs."
-            };
-          }
-
-          return {
-            success: false,
-            error: "Failed to generate solution with Anthropic API. Please check your API key or try again later."
-          };
-        }
+        const responseText = (response.content[0] as { type: 'text', text: string }).text;
+        edgeCases = this.extractBulletPoints(responseText);
       }
       
-      // Extract parts from the response
-      const codeMatch = responseContent.match(/```(?:\w+)?\s*([\s\S]*?)```/);
-      const code = codeMatch ? codeMatch[1].trim() : responseContent;
+      // Update thoughts with edge cases
+      finalResponse.thoughts = edgeCases;
+
+      // Send edge case results
+      if (mainWindow) {
+        console.log("EDGE_CASES_EXTRACTED - Sending data:", { thoughts: edgeCases });
+        mainWindow.webContents.send(
+          this.deps.PROCESSING_EVENTS.EDGE_CASES_EXTRACTED,
+          { thoughts: edgeCases }
+        );
+      }
+
+      // ================ STAGE 2: SOLUTION THINKING ================
+      if (mainWindow) {
+        mainWindow.webContents.send("processing-status", {
+          message: "Developing solution insights...",
+          progress: 50
+        });
+      }
+
+      const solutionThinkingPrompt = `
+For the following coding problem, provide very concise insights about your approach:
+
+PROBLEM STATEMENT:
+${problemInfo.problem_statement}
+
+CONSTRAINTS:
+${problemInfo.constraints || "No specific constraints provided."}
+
+EXAMPLE INPUT:
+${problemInfo.example_input || "No example input provided."}
+
+EXAMPLE OUTPUT:
+${problemInfo.example_output || "No example output provided."}
+
+LANGUAGE: ${language}
+
+Provide exactly 3-5 key insights about how to approach this problem.
+Each insight must be:
+1. Presented as a bullet point
+2. Maximum 1-2 sentences each
+3. Clear and direct
+4. Focused on a single insight or technique
+
+IMPORTANT: Keep each bullet point extremely concise and direct.
+`;
+
+      let solutionThoughts: string[] = [];
       
-      // Extract thoughts, looking for bullet points or numbered lists
-      const thoughtsRegex = /(?:Thoughts:|Key Insights:|Reasoning:|Approach:)([\s\S]*?)(?:Time complexity:|$)/i;
-      const thoughtsMatch = responseContent.match(thoughtsRegex);
+      // API Call for solution thinking based on provider
+      if (apiProvider === "openai" && this.openaiClient) {
+        const thinkingResponse = await this.openaiClient.chat.completions.create({
+          model: config.solutionModel || "gpt-4o",
+          messages: [
+            { role: "system", content: "You are an expert coding interview assistant. Provide extremely concise insights (1-2 sentences per point max)." },
+            { role: "user", content: solutionThinkingPrompt }
+          ],
+          max_tokens: 1500,
+          temperature: 0.2
+        });
+        
+        const responseText = thinkingResponse.choices[0].message.content;
+        solutionThoughts = this.extractBulletPoints(responseText);
+      }
+      else if (apiProvider === "gemini" && this.geminiApiKey) {
+        // Gemini implementation for solution thinking
+        const geminiMessages = [
+          {
+            role: "user",
+            parts: [{ text: solutionThinkingPrompt }]
+          }
+        ];
+
+        const response = await axios.default.post(
+          `https://generativelanguage.googleapis.com/v1beta/models/${config.solutionModel || "gemini-2.0-flash"}:generateContent?key=${this.geminiApiKey}`,
+          {
+            contents: geminiMessages,
+            generationConfig: {
+              temperature: 0.2,
+              maxOutputTokens: 1500
+            }
+          },
+          { signal }
+        );
+
+        const responseData = response.data as GeminiResponse;
+        if (responseData.candidates && responseData.candidates.length > 0) {
+          const responseText = responseData.candidates[0].content.parts[0].text;
+          solutionThoughts = this.extractBulletPoints(responseText);
+        }
+      }
+      else if (apiProvider === "anthropic" && this.anthropicClient) {
+        const messages = [
+          {
+            role: "user" as const,
+            content: [{ type: "text" as const, text: solutionThinkingPrompt }]
+          }
+        ];
+
+        const response = await this.anthropicClient.messages.create({
+          model: config.solutionModel || "claude-3-7-sonnet-20250219",
+          max_tokens: 1500,
+          messages: messages,
+          temperature: 0.2
+        });
+
+        const responseText = (response.content[0] as { type: 'text', text: string }).text;
+        solutionThoughts = this.extractBulletPoints(responseText);
+      }
+      
+      // Do NOT accumulate thoughts - keep them separated by section
+      // finalResponse.thoughts = [...finalResponse.thoughts, ...solutionThoughts];
+      
+      // Log the breakdown of thoughts for debugging
+      console.log("Thoughts breakdown:");
+      console.log("- Edge cases:", edgeCases);
+      console.log("- Solution thinking:", solutionThoughts);
+
+      // Send solution thinking results
+      if (mainWindow) {
+        console.log("SOLUTION_THINKING - Sending data:", { 
+          solutionThoughts: solutionThoughts 
+        });
+        mainWindow.webContents.send(
+          this.deps.PROCESSING_EVENTS.SOLUTION_THINKING,
+          { 
+            thoughts: solutionThoughts,  // Only send solution thoughts, not accumulated
+            edgeCases: edgeCases,
+            solutionThoughts: solutionThoughts
+          }
+        );
+      }
+
+      // ================ STAGE 3: APPROACH AND PSEUDOCODE ================
+      if (mainWindow) {
+        mainWindow.webContents.send("processing-status", {
+          message: "Developing solution approach...",
+          progress: 65
+        });
+      }
+
+      const approachPrompt = `
+Develop a solution approach for the following coding problem:
+
+PROBLEM STATEMENT:
+${problemInfo.problem_statement}
+
+CONSTRAINTS:
+${problemInfo.constraints || "No specific constraints provided."}
+
+EXAMPLE INPUT:
+${problemInfo.example_input || "No example input provided."}
+
+EXAMPLE OUTPUT:
+${problemInfo.example_output || "No example output provided."}
+
+LANGUAGE: ${language}
+
+First, provide a high-level algorithm approach (step by step).
+
+THEN, PROVIDE A SECTION CLEARLY LABELED AS "PSEUDOCODE:" that contains a detailed pseudocode implementation of your solution. 
+Format the pseudocode in a code block using triple backticks, like this:
+
+\`\`\`
+function sampleAlgorithm(input):
+    // initialization steps
+    initialize variables
+    
+    // main logic with proper indentation
+    for each element in input:
+        if condition:
+            do something
+            nested operations
+        else:
+            do something else
+    
+    // return the result
+    return result
+\`\`\`
+
+IMPORTANT FORMATTING REQUIREMENTS:
+1. Use proper indentation (4 spaces per level) to show nested blocks and structure
+2. Include clear comments before major sections
+3. Use consistent naming and syntax
+4. Structure the code with clear logical blocks
+5. Make sure conditionals and loops are properly indented
+
+If your solution involves recursion, clearly explain the recursion logic, base case, and stopping condition.
+If your solution involves dynamic programming, explain the DP table structure, state transitions, and base cases.
+`;
+
       let thoughts: string[] = [];
+      let pseudoCode = "";
       
-      if (thoughtsMatch && thoughtsMatch[1]) {
-        // Extract bullet points or numbered items
-        const bulletPoints = thoughtsMatch[1].match(/(?:^|\n)\s*(?:[-*•]|\d+\.)\s*(.*)/g);
-        if (bulletPoints) {
-          thoughts = bulletPoints.map(point => 
-            point.replace(/^\s*(?:[-*•]|\d+\.)\s*/, '').trim()
-          ).filter(Boolean);
-        } else {
-          // If no bullet points found, split by newlines and filter empty lines
-          thoughts = thoughtsMatch[1].split('\n')
-            .map((line) => line.trim())
-            .filter(Boolean);
+      console.log("Sending approach prompt:", approachPrompt);
+      
+      // API Call for approach based on provider
+      if (apiProvider === "openai" && this.openaiClient) {
+        const approachResponse = await this.openaiClient.chat.completions.create({
+          model: config.solutionModel || "gpt-4o",
+          messages: [
+            { role: "system", content: "You are an expert coding interview assistant. Develop clear solution approaches for coding problems." },
+            { role: "user", content: approachPrompt }
+          ],
+          max_tokens: 2000,
+          temperature: 0.2
+        });
+        
+        const responseText = approachResponse.choices[0].message.content;
+        console.log("Approach response full text:", responseText);
+        thoughts = this.extractBulletPoints(responseText);
+        pseudoCode = this.extractPseudoCode(responseText);
+        console.log("Extracted pseudocode:", pseudoCode);
+      } 
+      else if (apiProvider === "gemini" && this.geminiApiKey) {
+        // Gemini implementation for approach
+        const geminiMessages = [
+          {
+            role: "user",
+            parts: [{ text: approachPrompt }]
+          }
+        ];
+
+        const response = await axios.default.post(
+          `https://generativelanguage.googleapis.com/v1beta/models/${config.solutionModel || "gemini-2.0-flash"}:generateContent?key=${this.geminiApiKey}`,
+          {
+            contents: geminiMessages,
+            generationConfig: {
+              temperature: 0.2,
+              maxOutputTokens: 2000
+            }
+          },
+          { signal }
+        );
+
+        const responseData = response.data as GeminiResponse;
+        if (responseData.candidates && responseData.candidates.length > 0) {
+          const responseText = responseData.candidates[0].content.parts[0].text;
+          console.log("Gemini approach response:", responseText);
+          thoughts = this.extractBulletPoints(responseText);
+          pseudoCode = this.extractPseudoCode(responseText);
+          console.log("Extracted pseudocode from Gemini:", pseudoCode);
         }
       }
-      
-      // Extract complexity information
-      const timeComplexityPattern = /Time complexity:?\s*([^\n]+(?:\n[^\n]+)*?)(?=\n\s*(?:Space complexity|$))/i;
-      const spaceComplexityPattern = /Space complexity:?\s*([^\n]+(?:\n[^\n]+)*?)(?=\n\s*(?:[A-Z]|$))/i;
-      
-      let timeComplexity = "O(n) - Linear time complexity because we only iterate through the array once. Each element is processed exactly one time, and the hashmap lookups are O(1) operations.";
-      let spaceComplexity = "O(n) - Linear space complexity because we store elements in the hashmap. In the worst case, we might need to store all elements before finding the solution pair.";
-      
-      const timeMatch = responseContent.match(timeComplexityPattern);
-      if (timeMatch && timeMatch[1]) {
-        timeComplexity = timeMatch[1].trim();
-        if (!timeComplexity.match(/O\([^)]+\)/i)) {
-          timeComplexity = `O(n) - ${timeComplexity}`;
-        } else if (!timeComplexity.includes('-') && !timeComplexity.includes('because')) {
-          const notationMatch = timeComplexity.match(/O\([^)]+\)/i);
-          if (notationMatch) {
-            const notation = notationMatch[0];
-            const rest = timeComplexity.replace(notation, '').trim();
-            timeComplexity = `${notation} - ${rest}`;
+      else if (apiProvider === "anthropic" && this.anthropicClient) {
+        const messages = [
+          {
+            role: "user" as const,
+            content: [{ type: "text" as const, text: approachPrompt }]
           }
-        }
+        ];
+
+        const response = await this.anthropicClient.messages.create({
+          model: config.solutionModel || "claude-3-7-sonnet-20250219",
+          max_tokens: 2000,
+          messages: messages,
+          temperature: 0.2
+        });
+
+        const responseText = (response.content[0] as { type: 'text', text: string }).text;
+        console.log("Anthropic approach response:", responseText);
+        thoughts = this.extractBulletPoints(responseText);
+        pseudoCode = this.extractPseudoCode(responseText);
+        console.log("Extracted pseudocode from Anthropic:", pseudoCode);
       }
       
-      const spaceMatch = responseContent.match(spaceComplexityPattern);
-      if (spaceMatch && spaceMatch[1]) {
-        spaceComplexity = spaceMatch[1].trim();
-        if (!spaceComplexity.match(/O\([^)]+\)/i)) {
-          spaceComplexity = `O(n) - ${spaceComplexity}`;
-        } else if (!spaceComplexity.includes('-') && !spaceComplexity.includes('because')) {
-          const notationMatch = spaceComplexity.match(/O\([^)]+\)/i);
-          if (notationMatch) {
-            const notation = notationMatch[0];
-            const rest = spaceComplexity.replace(notation, '').trim();
-            spaceComplexity = `${notation} - ${rest}`;
+      // Update thoughts with approach insights
+      finalResponse.thoughts = [...edgeCases, ...solutionThoughts, ...thoughts];
+
+      // Send approach results
+      if (mainWindow) {
+        // Debug log to check what we're sending
+        console.log("APPROACH_DEVELOPED - Sending data with pseudo_code:", { 
+          thoughts: thoughts.length,
+          pseudo_code: pseudoCode,
+          pseudo_code_length: pseudoCode ? pseudoCode.length : 0,
+          is_null: pseudoCode === null,
+          is_empty: pseudoCode === "",
+          typeof: typeof pseudoCode
+        });
+        
+        console.log("APPROACH_DEVELOPED - Sending data:", { 
+          thoughts: thoughts,
+          pseudo_code: pseudoCode
+        });
+        
+        mainWindow.webContents.send(
+          this.deps.PROCESSING_EVENTS.APPROACH_DEVELOPED,
+          { 
+            thoughts: thoughts,  // Only send approach thoughts, not accumulated
+            pseudo_code: pseudoCode
           }
-        }
+        );
       }
 
-      const formattedResponse = {
-        code: code,
-        thoughts: thoughts.length > 0 ? thoughts : ["Solution approach based on efficiency and readability"],
-        time_complexity: timeComplexity,
-        space_complexity: spaceComplexity
-      };
+      // ================ STAGE 4: SOLUTION CODE ================
+      if (mainWindow) {
+        mainWindow.webContents.send("processing-status", {
+          message: "Generating solution code...",
+          progress: 80
+        });
+      }
 
-      return { success: true, data: formattedResponse };
+      const codePrompt = `
+Generate a clean, optimized solution for the following coding problem:
+
+PROBLEM STATEMENT:
+${problemInfo.problem_statement}
+
+CONSTRAINTS:
+${problemInfo.constraints || "No specific constraints provided."}
+
+EXAMPLE INPUT:
+${problemInfo.example_input || "No example input provided."}
+
+EXAMPLE OUTPUT:
+${problemInfo.example_output || "No example output provided."}
+
+LANGUAGE: ${language}
+
+Based on the following approach:
+${pseudoCode}
+
+Provide only the full, runnable code solution. Make it efficient, handle edge cases, and include necessary comments for clarity.
+`;
+
+      // API Call for code based on provider
+      if (apiProvider === "openai" && this.openaiClient) {
+        const codeResponse = await this.openaiClient.chat.completions.create({
+          model: config.solutionModel || "gpt-4o",
+          messages: [
+            { role: "system", content: "You are an expert coding interview assistant. Generate clean, optimized code solutions." },
+            { role: "user", content: codePrompt }
+          ],
+          max_tokens: 2000,
+          temperature: 0.2
+        });
+        
+        const responseText = codeResponse.choices[0].message.content;
+        finalResponse.code = this.extractCodeBlock(responseText);
+      } 
+      else if (apiProvider === "gemini" && this.geminiApiKey) {
+        // Gemini implementation for code
+        const geminiMessages = [
+          {
+            role: "user",
+            parts: [{ text: codePrompt }]
+          }
+        ];
+
+        const response = await axios.default.post(
+          `https://generativelanguage.googleapis.com/v1beta/models/${config.solutionModel || "gemini-2.0-flash"}:generateContent?key=${this.geminiApiKey}`,
+          {
+            contents: geminiMessages,
+            generationConfig: {
+              temperature: 0.2,
+              maxOutputTokens: 2000
+            }
+          },
+          { signal }
+        );
+
+        const responseData = response.data as GeminiResponse;
+        if (responseData.candidates && responseData.candidates.length > 0) {
+          const responseText = responseData.candidates[0].content.parts[0].text;
+          finalResponse.code = this.extractCodeBlock(responseText);
+        }
+      }
+      else if (apiProvider === "anthropic" && this.anthropicClient) {
+        const messages = [
+          {
+            role: "user" as const,
+            content: [{ type: "text" as const, text: codePrompt }]
+          }
+        ];
+
+        const response = await this.anthropicClient.messages.create({
+          model: config.solutionModel || "claude-3-7-sonnet-20250219",
+          max_tokens: 2000,
+          messages: messages,
+          temperature: 0.2
+        });
+
+        const responseText = (response.content[0] as { type: 'text', text: string }).text;
+        finalResponse.code = this.extractCodeBlock(responseText);
+      }
+      
+      // Send code results
+      if (mainWindow) {
+        console.log("CODE_GENERATED - Sending data:", { 
+          thoughts: finalResponse.thoughts,
+          code: finalResponse.code 
+        });
+        mainWindow.webContents.send(
+          this.deps.PROCESSING_EVENTS.CODE_GENERATED,
+          { 
+            thoughts: finalResponse.thoughts,
+            code: finalResponse.code 
+          }
+        );
+      }
+
+      // ================ STAGE 5: COMPLEXITY ANALYSIS ================
+      if (mainWindow) {
+        mainWindow.webContents.send("processing-status", {
+          message: "Analyzing time and space complexity...",
+          progress: 90
+        });
+      }
+
+      const complexityPrompt = `
+Analyze the time and space complexity of the following solution:
+
+PROBLEM STATEMENT:
+${problemInfo.problem_statement}
+
+SOLUTION:
+${finalResponse.code}
+
+Provide a detailed analysis of:
+1. Time Complexity: What is the Big O notation? Explain why in 2-3 sentences.
+2. Space Complexity: What is the Big O notation? Explain why in 2-3 sentences.
+
+Be specific about how you arrived at your complexity analysis.
+`;
+
+      // API Call for complexity based on provider
+      if (apiProvider === "openai" && this.openaiClient) {
+        const complexityResponse = await this.openaiClient.chat.completions.create({
+          model: config.solutionModel || "gpt-4o",
+          messages: [
+            { role: "system", content: "You are an expert coding interview assistant. Provide detailed complexity analysis for algorithms." },
+            { role: "user", content: complexityPrompt }
+          ],
+          max_tokens: 1000,
+          temperature: 0.2
+        });
+        
+        const responseText = complexityResponse.choices[0].message.content;
+        const complexities = this.extractComplexity(responseText);
+        finalResponse.time_complexity = complexities.time;
+        finalResponse.space_complexity = complexities.space;
+      } 
+      else if (apiProvider === "gemini" && this.geminiApiKey) {
+        // Gemini implementation for complexity
+        const geminiMessages = [
+          {
+            role: "user",
+            parts: [{ text: complexityPrompt }]
+          }
+        ];
+
+        const response = await axios.default.post(
+          `https://generativelanguage.googleapis.com/v1beta/models/${config.solutionModel || "gemini-2.0-flash"}:generateContent?key=${this.geminiApiKey}`,
+          {
+            contents: geminiMessages,
+            generationConfig: {
+              temperature: 0.2,
+              maxOutputTokens: 1000
+            }
+          },
+          { signal }
+        );
+
+        const responseData = response.data as GeminiResponse;
+        if (responseData.candidates && responseData.candidates.length > 0) {
+          const responseText = responseData.candidates[0].content.parts[0].text;
+          const complexities = this.extractComplexity(responseText);
+          finalResponse.time_complexity = complexities.time;
+          finalResponse.space_complexity = complexities.space;
+        }
+      }
+      else if (apiProvider === "anthropic" && this.anthropicClient) {
+        const messages = [
+          {
+            role: "user" as const,
+            content: [{ type: "text" as const, text: complexityPrompt }]
+          }
+        ];
+
+        const response = await this.anthropicClient.messages.create({
+          model: config.solutionModel || "claude-3-7-sonnet-20250219",
+          max_tokens: 1000,
+          messages: messages,
+          temperature: 0.2
+        });
+
+        const responseText = (response.content[0] as { type: 'text', text: string }).text;
+        const complexities = this.extractComplexity(responseText);
+        finalResponse.time_complexity = complexities.time;
+        finalResponse.space_complexity = complexities.space;
+      }
+
+      // Final solution success
+      if (mainWindow) {
+        console.log("SOLUTION_SUCCESS - Sending final data:", { 
+          code: finalResponse.code,
+          thoughts: finalResponse.thoughts,
+          time_complexity: finalResponse.time_complexity,
+          space_complexity: finalResponse.space_complexity
+        });
+        mainWindow.webContents.send(
+          this.deps.PROCESSING_EVENTS.SOLUTION_SUCCESS,
+          finalResponse
+        );
+      }
+
+      return { success: true, data: finalResponse };
     } catch (error: any) {
       if (axios.isCancel(error)) {
         return {
@@ -987,6 +1359,113 @@ Your solution should be efficient, well-commented, and handle edge cases.
       console.error("Solution generation error:", error);
       return { success: false, error: error.message || "Failed to generate solution" };
     }
+  }
+
+  // Helper methods to extract different parts from AI responses
+  private extractBulletPoints(text: string): string[] {
+    // Find bullet points or numbered lists
+    const bulletRegex = /(?:^|\n)\s*(?:[-*•]|\d+\.)\s*(.*)/g;
+    const matches = [...text.matchAll(bulletRegex)];
+    
+    if (matches.length > 0) {
+      return matches.map(match => match[1].trim()).filter(Boolean);
+    }
+    
+    // If no bullet points found, try to extract sentences
+    const sentences = text.split(/(?:[.!?]\s+|\n)/).map(s => s.trim()).filter(Boolean);
+    return sentences.slice(0, Math.min(5, sentences.length));
+  }
+
+  private extractPseudoCode(text: string): string {
+    console.log("Extracting pseudocode from text:", text.substring(0, 300) + "...");
+    
+    // First try to extract code blocks - most reliable format
+    const codeBlockRegexes = [
+      // Standard code block with pseudocode or algorithm language
+      /```(?:pseudocode|algorithm|plaintext)?\s*([\s\S]*?)```/i,
+      
+      // Any code block if the first pattern doesn't match
+      /```\s*([\s\S]*?)```/i
+    ];
+    
+    for (const regex of codeBlockRegexes) {
+      const match = text.match(regex);
+      if (match && match[1] && match[1].trim().length > 0) {
+        const extracted = match[1].trim();
+        console.log("Extracted pseudocode using code block pattern:", extracted);
+        return extracted;
+      }
+    }
+    
+    // Try to find pseudocode section between markers as fallback
+    const pseudoRegexes = [
+      // Look for "Pseudo-code:" or "Pseudocode:" or "Algorithm:" heading
+      /(?:Pseudo[ -]?[Cc]ode:?|Algorithm:?)([\s\S]*?)(?=\n\s*(?:[A-Z][a-z]+:|\d+\.|$))/i,
+      
+      // Look for sections between headers
+      /(?:##\s*Pseudo[ -]?[Cc]ode|##\s*Algorithm)([\s\S]*?)(?=##|$)/i,
+      
+      // Look for numbered steps for algorithm
+      /(?:Steps:|Algorithm steps:|Approach:)([\s\S]*?)(?=\n\s*(?:[A-Z][a-z]+:|\d+\.|Time|Space|$))/i
+    ];
+    
+    // Try each regex pattern
+    for (const regex of pseudoRegexes) {
+      const match = text.match(regex);
+      if (match && match[1] && match[1].trim().length > 0) {
+        const extracted = match[1].trim();
+        console.log("Extracted pseudocode using heading pattern:", extracted);
+        return extracted;
+      }
+    }
+    
+    // Last resort: look for numbered steps (1., 2., etc.) as a fallback
+    const stepLines = text.match(/(?:^|\n)\s*(?:\d+\.\s+)(.+)/g);
+    if (stepLines && stepLines.length > 0) {
+      const extracted = stepLines.join('\n').trim();
+      console.log("Extracted pseudocode using numbered steps pattern:", extracted);
+      return extracted;
+    }
+    
+    console.log("No pseudocode found in text");
+    return "";
+  }
+
+  private extractCodeBlock(text: string): string {
+    const codeBlockRegex = /```(?:\w+)?\s*([\s\S]*?)```/;
+    const match = text.match(codeBlockRegex);
+    
+    return match ? match[1].trim() : text.trim();
+  }
+
+  private extractComplexity(text: string): { time: string, space: string } {
+    // Extract time complexity
+    const timeRegex = /(?:Time[- ]?[Cc]omplexity:?|Time:?)\s*([^\n]+(?:\n[^\n]+)*?)(?=\n\s*(?:Space|$))/i;
+    const timeMatch = text.match(timeRegex);
+    
+    // Extract space complexity
+    const spaceRegex = /(?:Space[- ]?[Cc]omplexity:?|Space:?)\s*([^\n]+(?:\n[^\n]+)*?)(?=\n|$)/i;
+    const spaceMatch = text.match(spaceRegex);
+    
+    const formatComplexity = (complexity: string | null): string => {
+      if (!complexity) return "O(n) - Complexity not available";
+      
+      const bigORegex = /O\([^)]+\)/i;
+      if (bigORegex.test(complexity)) {
+        if (!complexity.includes('-') && !complexity.includes('because')) {
+          const notation = complexity.match(bigORegex)?.[0] || "";
+          return `${notation} - ${complexity.replace(notation, '').trim()}`;
+        }
+        return complexity.trim();
+      }
+      
+      return `O(n) - ${complexity.trim()}`;
+    };
+    
+    return {
+      time: formatComplexity(timeMatch?.[1] || null),
+      space: formatComplexity(spaceMatch?.[1] || null)
+    };
   }
 
   private async processExtraScreenshotsHelper(

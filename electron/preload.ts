@@ -12,6 +12,10 @@ export const PROCESSING_EVENTS = {
   //states for generating the initial solution
   INITIAL_START: "initial-start",
   PROBLEM_EXTRACTED: "problem-extracted",
+  EDGE_CASES_EXTRACTED: "edge-cases-extracted",
+  SOLUTION_THINKING: "solution-thinking",
+  APPROACH_DEVELOPED: "approach-developed",
+  CODE_GENERATED: "code-generated",
   SOLUTION_SUCCESS: "solution-success",
   INITIAL_SOLUTION_ERROR: "solution-error",
   RESET: "reset",
@@ -259,6 +263,51 @@ const electronAPI = {
     ipcRenderer.on("click-through-toggled", (_, data) => callback(data))
     return () => {
       ipcRenderer.removeAllListeners("click-through-toggled")
+    }
+  },
+  // Add new event handlers for sequential processing
+  onEdgeCasesExtracted: (callback: (data: any) => void) => {
+    const subscription = (_: any, data: any) => callback(data)
+    ipcRenderer.on(PROCESSING_EVENTS.EDGE_CASES_EXTRACTED, subscription)
+    return () => {
+      ipcRenderer.removeListener(
+        PROCESSING_EVENTS.EDGE_CASES_EXTRACTED,
+        subscription
+      )
+    }
+  },
+  
+  onApproachDeveloped: (callback: (data: any) => void) => {
+    const subscription = (_: any, data: any) => callback(data)
+    ipcRenderer.on(PROCESSING_EVENTS.APPROACH_DEVELOPED, subscription)
+    return () => {
+      ipcRenderer.removeListener(
+        PROCESSING_EVENTS.APPROACH_DEVELOPED,
+        subscription
+      )
+    }
+  },
+  
+  onCodeGenerated: (callback: (data: any) => void) => {
+    const subscription = (_: any, data: any) => callback(data)
+    ipcRenderer.on(PROCESSING_EVENTS.CODE_GENERATED, subscription)
+    return () => {
+      ipcRenderer.removeListener(
+        PROCESSING_EVENTS.CODE_GENERATED,
+        subscription
+      )
+    }
+  },
+  
+  // Solution Thinking event handler
+  onSolutionThinking: (callback: (data: any) => void) => {
+    const subscription = (_: any, data: any) => callback(data)
+    ipcRenderer.on(PROCESSING_EVENTS.SOLUTION_THINKING, subscription)
+    return () => {
+      ipcRenderer.removeListener(
+        PROCESSING_EVENTS.SOLUTION_THINKING,
+        subscription
+      )
     }
   }
 }

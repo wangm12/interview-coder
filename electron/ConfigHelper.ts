@@ -31,7 +31,7 @@ export class ConfigHelper extends EventEmitter {
     solutionModel: "gemini-2.0-flash",
     debuggingModel: "gemini-2.0-flash",
     language: "python",
-    opacity: 1.0,
+    opacity: 0.8,
     keyboardModifier: "CommandOrControl"
   };
 
@@ -63,68 +63,11 @@ export class ConfigHelper extends EventEmitter {
     }
   }
 
-  /**
-   * Validate and sanitize model selection to ensure only allowed models are used
-   */
-  private sanitizeModelSelection(model: string, provider: ApiProvider): string {
-    if (provider === "openai") {
-      // Only allow gpt-4o and gpt-4o-mini for OpenAI
-      const allowedModels = ['gpt-4o', 'gpt-4o-mini'];
-      if (!allowedModels.includes(model)) {
-        console.warn(`Invalid OpenAI model specified: ${model}. Using default model: gpt-4o`);
-        return 'gpt-4o';
-      }
-      return model;
-    } else if (provider === "gemini")  {
-      // Only allow gemini-1.5-pro and gemini-2.0-flash for Gemini
-      const allowedModels = ['gemini-1.5-pro', 'gemini-2.0-flash'];
-      if (!allowedModels.includes(model)) {
-        console.warn(`Invalid Gemini model specified: ${model}. Using default model: gemini-2.0-flash`);
-        return 'gemini-2.0-flash'; // Changed default to flash
-      }
-      return model;
-    }  else if (provider === "anthropic") {
-      // Only allow Claude models
-      const allowedModels = ['claude-3-7-sonnet-20250219', 'claude-3-5-sonnet-20241022', 'claude-3-opus-20240229'];
-      if (!allowedModels.includes(model)) {
-        console.warn(`Invalid Anthropic model specified: ${model}. Using default model: claude-3-7-sonnet-20250219`);
-        return 'claude-3-7-sonnet-20250219';
-      }
-      return model;
-    }
-    // Default fallback
-    return model;
-  }
-
   public loadConfig(): Config {
     try {
       if (fs.existsSync(this.configPath)) {
         const configData = fs.readFileSync(this.configPath, 'utf8');
         let config = JSON.parse(configData);
-        
-        // Handle migration from old config format (single apiKey) to new format (apiKeys map)
-        if (config.apiKey !== undefined && (!config.apiKeys || !config.apiKeys[config.apiProvider])) {
-          // Initialize apiKeys if not present
-          if (!config.apiKeys) {
-            config.apiKeys = {
-              openai: "",
-              gemini: "",
-              anthropic: ""
-            };
-          }
-          
-          // Transfer the existing apiKey to the appropriate provider
-          if (config.apiProvider && config.apiKey) {
-            config.apiKeys[config.apiProvider] = config.apiKey;
-          }
-          
-          // Remove the old apiKey field
-          delete config.apiKey;
-          
-          // Save the migrated config
-          this.saveConfig(config);
-          console.log("Migrated config from old format (single apiKey) to new format (apiKeys map)");
-        }
         
         // Ensure apiProvider is a valid value
         if (config.apiProvider !== "openai" && config.apiProvider !== "gemini" && config.apiProvider !== "anthropic") {
@@ -139,18 +82,7 @@ export class ConfigHelper extends EventEmitter {
             anthropic: ""
           };
         }
-        
-        // Sanitize model selections to ensure only allowed models are used
-        if (config.extractionModel) {
-          config.extractionModel = this.sanitizeModelSelection(config.extractionModel, config.apiProvider);
-        }
-        if (config.solutionModel) {
-          config.solutionModel = this.sanitizeModelSelection(config.solutionModel, config.apiProvider);
-        }
-        if (config.debuggingModel) {
-          config.debuggingModel = this.sanitizeModelSelection(config.debuggingModel, config.apiProvider);
-        }
-        
+
         return {
           ...this.defaultConfig,
           ...config
@@ -184,77 +116,47 @@ export class ConfigHelper extends EventEmitter {
   }
 
   /**
+   * TODO: the default way of updating is kinda sus
    * Update specific configuration values
    */
   public updateConfig(updates: Partial<Config> & { apiKey?: string }): Config {
     try {
+      // get the current config
       const currentConfig = this.loadConfig();
-      let provider = updates.apiProvider || currentConfig.apiProvider;
-      
-      // Handle the case where an apiKey is provided directly (for backward compatibility)
-      if (updates.apiKey !== undefined) {
-        // Initialize apiKeys if not set
-        const apiKeys = currentConfig.apiKeys || {
-          openai: "",
-          gemini: "",
-          anthropic: ""
-        };
-        
-        // Auto-detect provider based on API key format if no provider specified
-        if (!updates.apiProvider) {
-          if (updates.apiKey.trim().startsWith('sk-')) {
-            if (updates.apiKey.trim().startsWith('sk-ant-')) {
-              provider = "anthropic";
-              console.log("Auto-detected Anthropic API key format");
-            } else {
-              provider = "openai";
-              console.log("Auto-detected OpenAI API key format");
-            }
-          } else {
-            provider = "gemini";
-            console.log("Using Gemini API key format (default)");
-          }
-          
-          // Update the provider in the updates
-          updates.apiProvider = provider;
+            
+      const _defaultModels = {
+        openai: {
+          extractionModel: "gpt-4o",
+          solutionModel: "gpt-4o",
+          debuggingModel: "gpt-4o"
+        },
+        gemini: {
+          extractionModel: "gemini-2.0-flash",
+          solutionModel: "gemini-2.0-flash",
+          debuggingModel: "gemini-2.0-flash"
+        },
+        anthropic: {
+          extractionModel: "claude-3-7-sonnet-20250219",
+          solutionModel: "claude-3-7-sonnet-20250219",
+          debuggingModel: "claude-3-7-sonnet-20250219"
         }
-        
-        // Set the API key for the specific provider
-        apiKeys[provider] = updates.apiKey;
-        
-        // Update the apiKeys in the updates
-        updates.apiKeys = apiKeys;
-        
-        // Remove the old apiKey field
-        delete updates.apiKey;
       }
-      
+
       // If provider is changing, reset models to the default for that provider
       if (updates.apiProvider && updates.apiProvider !== currentConfig.apiProvider) {
         if (updates.apiProvider === "openai") {
-          updates.extractionModel = "gpt-4o";
-          updates.solutionModel = "gpt-4o";
-          updates.debuggingModel = "gpt-4o";
+          updates.extractionModel = _defaultModels.openai.extractionModel;
+          updates.solutionModel = _defaultModels.openai.solutionModel;
+          updates.debuggingModel = _defaultModels.openai.debuggingModel;
+        } else if (updates.apiProvider === "gemini") {
+          updates.extractionModel = _defaultModels.gemini.extractionModel;
+          updates.solutionModel = _defaultModels.gemini.solutionModel;
+          updates.debuggingModel = _defaultModels.gemini.debuggingModel;
         } else if (updates.apiProvider === "anthropic") {
-          updates.extractionModel = "claude-3-7-sonnet-20250219";
-          updates.solutionModel = "claude-3-7-sonnet-20250219";
-          updates.debuggingModel = "claude-3-7-sonnet-20250219";
-        } else {
-          updates.extractionModel = "gemini-2.0-flash";
-          updates.solutionModel = "gemini-2.0-flash";
-          updates.debuggingModel = "gemini-2.0-flash";
+          updates.extractionModel = _defaultModels.anthropic.extractionModel;
+          updates.solutionModel = _defaultModels.anthropic.solutionModel;
+          updates.debuggingModel = _defaultModels.anthropic.debuggingModel;
         }
-      }
-      
-      // Sanitize model selections in the updates
-      if (updates.extractionModel) {
-        updates.extractionModel = this.sanitizeModelSelection(updates.extractionModel, provider);
-      }
-      if (updates.solutionModel) {
-        updates.solutionModel = this.sanitizeModelSelection(updates.solutionModel, provider);
-      }
-      if (updates.debuggingModel) {
-        updates.debuggingModel = this.sanitizeModelSelection(updates.debuggingModel, provider);
       }
       
       const newConfig = { ...currentConfig, ...updates };

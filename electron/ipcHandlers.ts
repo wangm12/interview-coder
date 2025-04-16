@@ -16,12 +16,6 @@ export function initializeIpcHandlers(deps: IIpcHandlerDeps): void {
     // Log updates for debugging
     console.log("Updating config with:", {
       ...updates,
-      apiKey: updates.apiKey ? "[REDACTED]" : undefined,
-      apiKeys: updates.apiKeys ? {
-        openai: updates.apiKeys.openai ? "[REDACTED]" : "",
-        gemini: updates.apiKeys.gemini ? "[REDACTED]" : "",
-        anthropic: updates.apiKeys.anthropic ? "[REDACTED]" : ""
-      } : undefined
     });
     
     const currentConfig = configHelper.loadConfig();
@@ -71,43 +65,6 @@ export function initializeIpcHandlers(deps: IIpcHandlerDeps): void {
     // Then test the API key with OpenAI
     const result = await configHelper.testApiKey(apiKey);
     return result;
-  })
-
-  // Credits handlers
-  ipcMain.handle("set-initial-credits", async (_event, credits: number) => {
-    const mainWindow = deps.getMainWindow()
-    if (!mainWindow) return
-
-    try {
-      // Set the credits in a way that ensures atomicity
-      await mainWindow.webContents.executeJavaScript(
-        `window.__CREDITS__ = ${credits}`
-      )
-      mainWindow.webContents.send("credits-updated", credits)
-    } catch (error) {
-      console.error("Error setting initial credits:", error)
-      throw error
-    }
-  })
-
-  ipcMain.handle("decrement-credits", async () => {
-    const mainWindow = deps.getMainWindow()
-    if (!mainWindow) return
-
-    try {
-      const currentCredits = await mainWindow.webContents.executeJavaScript(
-        "window.__CREDITS__"
-      )
-      if (currentCredits > 0) {
-        const newCredits = currentCredits - 1
-        await mainWindow.webContents.executeJavaScript(
-          `window.__CREDITS__ = ${newCredits}`
-        )
-        mainWindow.webContents.send("credits-updated", newCredits)
-      }
-    } catch (error) {
-      console.error("Error decrementing credits:", error)
-    }
   })
 
   // Screenshot queue handlers

@@ -1,6 +1,6 @@
 // Solutions.tsx
 import React, { useState, useEffect, useRef } from "react"
-import { useQuery, useQueryClient } from "@tanstack/react-query"
+import { useQueryClient } from "@tanstack/react-query"
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter"
 import { dracula } from "react-syntax-highlighter/dist/esm/styles/prism"
 
@@ -10,7 +10,6 @@ import { ProblemStatementData } from "../types/solutions"
 import SolutionCommands from "../components/Solutions/SolutionCommands"
 import Debug from "./Debug"
 import { useToast } from "../contexts/toast"
-import { COMMAND_KEY } from "../utils/platform"
 
 export const ContentSection = ({
   title,
@@ -49,16 +48,6 @@ const SolutionSection = ({
   isLoading: boolean
   currentLanguage: string
 }) => {
-  const [copied, setCopied] = useState(false)
-
-  const copyToClipboard = () => {
-    if (typeof content === "string") {
-      navigator.clipboard.writeText(content).then(() => {
-        setCopied(true)
-        setTimeout(() => setCopied(false), 2000)
-      })
-    }
-  }
 
   return (
     <div className="space-y-2 relative">
@@ -75,12 +64,6 @@ const SolutionSection = ({
         </div>
       ) : (
         <div className="w-full relative">
-          <button
-            onClick={copyToClipboard}
-            className="absolute top-2 right-2 text-xs text-white bg-white/10 hover:bg-white/20 rounded px-2 py-1 transition"
-          >
-            {copied ? "Copied!" : "Copy"}
-          </button>
           <SyntaxHighlighter
             showLineNumbers
             language={currentLanguage == "golang" ? "go" : currentLanguage}
@@ -124,14 +107,14 @@ export const ComplexitySection = ({
     if (bigORegex.test(complexity)) {
       return complexity;
     }
-    
+
     // Concat Big O notation to the complexity
     return `O(${complexity})`;
   };
-  
+
   const formattedTimeComplexity = formatComplexity(timeComplexity);
   const formattedSpaceComplexity = formatComplexity(spaceComplexity);
-  
+
   return (
     <div className="space-y-2">
       <h2 className="text-[13px] font-medium text-white tracking-wide">
@@ -171,7 +154,24 @@ export interface SolutionsProps {
   currentLanguage: string
   setLanguage: (language: string) => void
 }
-const Solutions: React.FC<SolutionsProps> = ({
+
+// Define types for the solution data structure
+interface SolutionData {
+  code: string;
+  thoughts: string[];
+  time_complexity: string;
+  space_complexity: string;
+}
+
+interface DebugData {
+  code: string;
+  debug_analysis: string;
+  thoughts: string[];
+  time_complexity: string;
+  space_complexity: string;
+}
+
+export const Solutions: React.FC<SolutionsProps> = ({
   setView,
   credits,
   currentLanguage,
@@ -191,6 +191,18 @@ const Solutions: React.FC<SolutionsProps> = ({
   const [spaceComplexityData, setSpaceComplexityData] = useState<string | null>(
     null
   )
+
+  // New state for sequential processing stages
+  const [edgeCasesData, setEdgeCasesData] = useState<string[] | null>(null)
+  const [pseudoCodeData, setPseudoCodeData] = useState<string | null>(null)
+  const [solutionThinkingData, setSolutionThinkingData] = useState<string[] | null>(null)
+
+  // Loading states for different stages
+  const [loadingEdgeCases, setLoadingEdgeCases] = useState(false)
+  const [loadingSolutionThinking, setLoadingSolutionThinking] = useState(false)
+  const [loadingApproach, setLoadingApproach] = useState(false)
+  const [loadingCode, setLoadingCode] = useState(false)
+  const [loadingComplexity, setLoadingComplexity] = useState(false)
 
   const [isTooltipVisible, setIsTooltipVisible] = useState(false)
   const [tooltipHeight, setTooltipHeight] = useState(0)
@@ -299,20 +311,78 @@ const Solutions: React.FC<SolutionsProps> = ({
         setThoughtsData(null)
         setTimeComplexityData(null)
         setSpaceComplexityData(null)
+        setEdgeCasesData(null)
+        setSolutionThinkingData(null)
+        setPseudoCodeData(null)
+
+        // Reset loading states
+        setLoadingEdgeCases(true)
+        setLoadingSolutionThinking(false)
+        setLoadingApproach(false)
+        setLoadingCode(false)
+        setLoadingComplexity(false)
       }),
-      window.electronAPI.onProblemExtracted((data) => {
+      window.electronAPI.onProblemExtracted((data: ProblemStatementData) => {
         queryClient.setQueryData(["problem_statement"], data)
+
+        // After problem extraction, we're ready for edge cases
+        setLoadingEdgeCases(true)
       }),
+
+      // New event handlers for sequential processing
+      window.electronAPI.onEdgeCasesExtracted((data: {
+        thoughts: string[]
+      }) => {
+        const edgeCases = data.thoughts || [];
+        console.log("Received edge cases:", edgeCases);
+        setEdgeCasesData(edgeCases);
+        // Don't set the combined thoughts here
+        setLoadingEdgeCases(false);
+        setLoadingSolutionThinking(true);
+      }),
+
+      window.electronAPI.onSolutionThinking((data: {
+        thoughts: string[],
+        edgeCases: string[],
+        solutionThoughts: string[]
+      }) => {
+        // Use the already separated data
+        console.log("Received solution thinking data:", data);
+        // Don't combine thoughts here, just use the solution thoughts directly
+        setSolutionThinkingData(data.solutionThoughts || []);
+        setLoadingSolutionThinking(false);
+        setLoadingApproach(true);
+      }),
+
+      window.electronAPI.onApproachDeveloped((data: { thoughts: string[], pseudo_code?: string }) => {
+        console.log("Received approach data:", data);
+        console.log("Received pseudo_code:", {
+          value: data.pseudo_code,
+          length: data.pseudo_code ? data.pseudo_code.length : 0,
+          is_null: data.pseudo_code === null,
+          is_undefined: data.pseudo_code === undefined,
+          is_empty: data.pseudo_code === "",
+          typeof: typeof data.pseudo_code
+        });
+
+        // Set the pseudocode data
+        setPseudoCodeData(data.pseudo_code || null);
+        setLoadingApproach(false);
+        setLoadingCode(true);
+      }),
+
+      window.electronAPI.onCodeGenerated((data: { thoughts: string[], code: string }) => {
+        // Only set the code, not the accumulated thoughts
+        setSolutionData(data.code || null);
+        setLoadingCode(false);
+        setLoadingComplexity(true);
+      }),
+
       //if there was an error processing the initial solution
       window.electronAPI.onSolutionError((error: string) => {
         showToast("Processing Failed", error, "error")
-        // Reset solutions in the cache (even though this shouldn't ever happen) and complexities to previous states
-        const solution = queryClient.getQueryData(["solution"]) as {
-          code: string
-          thoughts: string[]
-          time_complexity: string
-          space_complexity: string
-        } | null
+        // Reset solutions in the cache and complexities to previous states
+        const solution = queryClient.getQueryData(["solution"]) as SolutionData | null
         if (!solution) {
           setView("queue")
         }
@@ -320,15 +390,26 @@ const Solutions: React.FC<SolutionsProps> = ({
         setThoughtsData(solution?.thoughts || null)
         setTimeComplexityData(solution?.time_complexity || null)
         setSpaceComplexityData(solution?.space_complexity || null)
+
+        // Reset loading states
+        setLoadingEdgeCases(false)
+        setLoadingSolutionThinking(false)
+        setLoadingApproach(false)
+        setLoadingCode(false)
+        setLoadingComplexity(false)
+
         console.error("Processing error:", error)
       }),
-      //when the initial solution is generated, we'll set the solution data to that
-      window.electronAPI.onSolutionSuccess((data) => {
+
+      //when the final solution is generated, we'll set all the data
+      window.electronAPI.onSolutionSuccess((data: SolutionData) => {
         if (!data) {
           console.warn("Received empty or invalid solution data")
           return
         }
-        console.log({ data })
+        console.log("Solution success with data:", data)
+
+        // Store the final solution data in the query cache
         const solutionData = {
           code: data.code,
           thoughts: data.thoughts,
@@ -337,17 +418,28 @@ const Solutions: React.FC<SolutionsProps> = ({
         }
 
         queryClient.setQueryData(["solution"], solutionData)
+
+        // Set the solution code, complexity data
         setSolutionData(solutionData.code || null)
-        setThoughtsData(solutionData.thoughts || null)
         setTimeComplexityData(solutionData.time_complexity || null)
         setSpaceComplexityData(solutionData.space_complexity || null)
+
+        // Note: We don't update the thoughts data here since we already have them separated
+        // by section (edge cases, solution thinking, etc.)
+
+        // Complete all loading states
+        setLoadingEdgeCases(false)
+        setLoadingSolutionThinking(false)
+        setLoadingApproach(false)
+        setLoadingCode(false)
+        setLoadingComplexity(false)
 
         // Fetch latest screenshots when solution is successful
         const fetchScreenshots = async () => {
           try {
             const existing = await window.electronAPI.getScreenshots()
             const screenshots =
-              existing.previews?.map((p) => ({
+              existing.previews?.map((p: { path: string, preview: string }) => ({
                 id: p.path,
                 path: p.path,
                 preview: p.preview,
@@ -370,7 +462,7 @@ const Solutions: React.FC<SolutionsProps> = ({
         setDebugProcessing(true)
       }),
       //the first time debugging works, we'll set the view to debug and populate the cache with the data
-      window.electronAPI.onDebugSuccess((data) => {
+      window.electronAPI.onDebugSuccess((data: DebugData) => {
         queryClient.setQueryData(["new_solution"], data)
         setDebugProcessing(false)
       }),
@@ -475,65 +567,76 @@ const Solutions: React.FC<SolutionsProps> = ({
       ) : (
         <div ref={contentRef} className="relative">
           <div className="space-y-3 px-4 py-3">
-          {/* Conditionally render the screenshot queue if solutionData is available */}
-          {solutionData && (
-            <div className="bg-transparent w-fit">
-              <div className="pb-3">
-                <div className="space-y-3 w-fit">
-                  <ScreenshotQueue
-                    isLoading={debugProcessing}
-                    screenshots={extraScreenshots}
-                    onDeleteScreenshot={handleDeleteExtraScreenshot}
-                  />
+            {/* Conditionally render the screenshot queue if solutionData is available */}
+            {solutionData && (
+              <div className="bg-transparent w-fit">
+                <div className="pb-3">
+                  <div className="space-y-3 w-fit">
+                    <ScreenshotQueue
+                      isLoading={debugProcessing}
+                      screenshots={extraScreenshots}
+                      onDeleteScreenshot={handleDeleteExtraScreenshot}
+                    />
+                  </div>
                 </div>
               </div>
-            </div>
-          )}
+            )}
 
-          {/* Navbar of commands with the SolutionsHelper */}
-          <SolutionCommands
-            onTooltipVisibilityChange={handleTooltipVisibilityChange}
-            isProcessing={!problemStatementData || !solutionData}
-            extraScreenshots={extraScreenshots}
-            credits={credits}
-            currentLanguage={currentLanguage}
-            setLanguage={setLanguage}
-          />
+            {/* Navbar of commands with the SolutionsHelper */}
+            <SolutionCommands
+              onTooltipVisibilityChange={handleTooltipVisibilityChange}
+              isProcessing={!problemStatementData || !solutionData}
+              extraScreenshots={extraScreenshots}
+              credits={credits}
+              currentLanguage={currentLanguage}
+              setLanguage={setLanguage}
+            />
 
-          {/* Main Content - Modified width constraints */}
-          <div className="w-full text-sm text-black bg-black/60 rounded-md">
-            <div className="rounded-lg overflow-hidden">
-              <div className="px-4 py-3 space-y-4 max-w-full">
-                {!solutionData && (
-                  <>
+            {/* Main Content - Modified width constraints */}
+            <div className="w-full text-sm text-black bg-black/60 rounded-md">
+              <div className="rounded-lg overflow-hidden">
+                <div className="px-4 py-3 space-y-4 max-w-full">
+                  {/* Problem Statement (always shows if available) */}
+                  {problemStatementData && (
                     <ContentSection
                       title="Problem Statement"
                       content={problemStatementData?.problem_statement}
                       isLoading={!problemStatementData}
                     />
-                    {problemStatementData && (
-                      <div className="mt-4 flex">
-                        <p className="text-xs bg-gradient-to-r from-gray-300 via-gray-100 to-gray-300 bg-clip-text text-transparent animate-pulse">
-                          Generating solutions...
-                        </p>
-                      </div>
-                    )}
-                  </>
-                )}
+                  )}
 
-                {solutionData && (
-                  <>
+                  {/* Edge Cases Section - Shows when loaded or loading */}
+                  {(loadingEdgeCases || edgeCasesData) && (
                     <ContentSection
-                      title={`My Thoughts (${COMMAND_KEY} + Arrow keys to scroll)`}
+                      title="Edge Cases"
                       content={
-                        thoughtsData && (
+                        edgeCasesData && (
                           <div className="space-y-3">
                             <div className="space-y-1">
-                              {thoughtsData.map((thought, index) => (
-                                <div
-                                  key={index}
-                                  className="flex items-start gap-2"
-                                >
+                              {edgeCasesData.map((edgeCase, index) => (
+                                <div key={index} className="flex items-start gap-2">
+                                  <div className="w-1 h-1 rounded-full bg-blue-400/80 mt-2 shrink-0" />
+                                  <div>{edgeCase}</div>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        )
+                      }
+                      isLoading={loadingEdgeCases}
+                    />
+                  )}
+
+                  {/* Solution Thinking Section - Shows when loading or loaded */}
+                  {(loadingSolutionThinking || solutionThinkingData) && (
+                    <ContentSection
+                      title="Solution Thinking"
+                      content={
+                        solutionThinkingData && (
+                          <div className="space-y-3">
+                            <div className="space-y-1">
+                              {solutionThinkingData.map((thought, index) => (
+                                <div key={index} className="flex items-start gap-2">
                                   <div className="w-1 h-1 rounded-full bg-blue-400/80 mt-2 shrink-0" />
                                   <div>{thought}</div>
                                 </div>
@@ -542,28 +645,52 @@ const Solutions: React.FC<SolutionsProps> = ({
                           </div>
                         )
                       }
-                      isLoading={!thoughtsData}
+                      isLoading={loadingSolutionThinking}
                     />
+                  )}
 
+                  {/* Approach Section - Shows when approach is loading or loaded */}
+                  {(loadingApproach || pseudoCodeData) && (
+                    <SolutionSection
+                      title="Pseudocode"
+                      content={pseudoCodeData || ""}
+                      isLoading={loadingApproach}
+                      currentLanguage={currentLanguage}
+                    />
+                  )}
+
+                  {/* Solution Section - Shows when solution code is loading or loaded */}
+                  {(loadingCode || solutionData) && (
                     <SolutionSection
                       title="Solution"
                       content={solutionData}
-                      isLoading={!solutionData}
+                      isLoading={loadingCode}
                       currentLanguage={currentLanguage}
                     />
+                  )}
 
+                  {/* Complexity Section - Shows when complexity is loading or loaded */}
+                  {(loadingComplexity || timeComplexityData) && (
                     <ComplexitySection
                       timeComplexity={timeComplexityData}
                       spaceComplexity={spaceComplexityData}
-                      isLoading={!timeComplexityData || !spaceComplexityData}
+                      isLoading={loadingComplexity}
                     />
-                  </>
-                )}
+                  )}
+
+                  {/* Loading indicator when we're at initial stages */}
+                  {problemStatementData && !thoughtsData && !loadingEdgeCases && !loadingApproach && (
+                    <div className="mt-4 flex">
+                      <p className="text-xs bg-gradient-to-r from-gray-300 via-gray-100 to-gray-300 bg-clip-text text-transparent animate-pulse">
+                        Starting solution generation...
+                      </p>
+                    </div>
+                  )}
+                </div>
               </div>
             </div>
           </div>
         </div>
-      </div>
       )}
     </>
   )
